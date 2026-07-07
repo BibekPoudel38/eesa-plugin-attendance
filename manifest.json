@@ -1,0 +1,26 @@
+{
+  "manifestVersion": "1.0",
+  "slug": "attendance",
+  "name": "Attendance",
+  "version": "2.0.0",
+  "description": "Geofence-based attendance marking and reporting. Check-in hot path + agent tools + admin explorer.",
+  "icon": "https://cdn.eesa.ai/icons/attendance.png",
+  "hostedBy": "self",
+  "developer": {"name": "Eesa Core", "email": "team@eesa.ai"},
+  "auth": {"verify": "eesa-jwks", "gatewayOnly": true},
+  "scopes": ["attendance:read", "attendance:write", "attendance:admin"],
+  "surfaces": {
+    "mcp": {
+      "endpoint": "https://attendance.plugins.eesa.ai/mcp",
+      "transport": "streamable-http",
+      "tools": [
+        {"name": "mark_attendance", "description": "Mark the current user present or absent"},
+        {"name": "who_is_late", "description": "List employees who checked in late today"},
+        {"name": "get_my_status", "description": "Get the current user's attendance status today"}
+      ]
+    },
+    "ui": {"url": "https://attendance.plugins.eesa.ai/app", "embeddable": true},
+    "rest": {"endpoint": "https://attendance.plugins.eesa.ai/api", "hotPath": true}
+  },
+  "entitlementKey": "attendance"
+}

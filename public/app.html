@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Attendance</title>
+  <style>
+    :root { --bg:#0f1b21; --card:#16262e; --line:#233842; --ink:#e9f3f4; --muted:#8aa0a8; --accent:#2db4be; }
+    @media (prefers-color-scheme: light){ :root{ --bg:#f4f8f8; --card:#fff; --line:#dce6e6; --ink:#0d1d23; --muted:#657a82; } }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+    header { padding:16px 20px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
+    h1 { font-size:1.05rem; margin:0; }
+    .who { color:var(--muted); font-size:.82rem; }
+    main { padding:20px; display:grid; gap:16px; max-width:760px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+    .card h2 { margin:0 0 10px; font-size:.9rem; color:var(--accent); text-transform:uppercase; letter-spacing:.05em; }
+    table { width:100%; border-collapse:collapse; font-size:.9rem; }
+    td, th { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); }
+    .muted { color:var(--muted); }
+    .err { color:#e0705e; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Attendance</h1>
+    <span class="who" id="who">connecting…</span>
+  </header>
+  <main>
+    <div class="card"><h2>Who's in today</h2><div id="presence" class="muted">Loading…</div></div>
+    <div class="card"><h2>Zones</h2><div id="zones" class="muted">Loading…</div></div>
+  </main>
+
+  <script>
+    // ---- Host ↔ plugin session bridge ----
+    // The Eesa shell embeds this page in a sandboxed frame and hands it a
+    // short-lived UI session token (surface="ui"). We announce readiness, then
+    // wait for the token, then call our own backend with it.
+    let TOKEN = null;
+
+    function api(path) {
+      return fetch(path, { headers: { Authorization: 'Bearer ' + TOKEN } })
+        .then(r => r.json());
+    }
+
+    async function boot() {
+      try {
+        const ctx = await api('/api/ui/context');
+        if (!ctx.ok) throw new Error(ctx.error || 'context failed');
+        document.getElementById('who').textContent = ctx.name + ' · ' + ctx.tenant;
+        const isAdmin = (ctx.scopes || []).includes('attendance:admin');
+
+        if (isAdmin) {
+          const pres = await api('/api/admin/presence');
+          renderPresence(pres.data || []);
+          const zones = await api('/api/admin/zones');
+          renderZones(zones.data || []);
+        } else {
+          document.getElementById('presence').innerHTML = '<span class="muted">Admin only.</span>';
+          const zones = await api('/api/getMyZones');
+          renderZones(zones.data || []);
+        }
+      } catch (e) {
+        document.getElementById('who').innerHTML = '<span class="err">' + e.message + '</span>';
+      }
+    }
+
+    function renderPresence(rows) {
+      const el = document.getElementById('presence');
+      if (!rows.length) return (el.innerHTML = '<span class="muted">No check-ins yet today.</span>');
+      el.innerHTML = '<table><tr><th>Employee</th><th>Last event</th><th>At</th></tr>' +
+        rows.map(r => `<tr><td>${r.employee_ref}</td><td>${r.type}</td><td>${new Date(r.at).toLocaleTimeString()}</td></tr>`).join('') + '</table>';
+    }
+    function renderZones(rows) {
+      const el = document.getElementById('zones');
+      if (!rows.length) return (el.innerHTML = '<span class="muted">No zones configured.</span>');
+      el.innerHTML = '<table><tr><th>Name</th><th>Radius</th></tr>' +
+        rows.map(z => `<tr><td>${z.name}</td><td>${z.radius_m} m</td></tr>`).join('') + '</table>';
+    }
+
+    window.addEventListener('message', (ev) => {
+      const msg = ev.data || {};
+      if (msg.type === 'eesa:session' && msg.token) {
+        TOKEN = msg.token;
+        boot();
+      }
+    });
+    // Web (iframe): announce readiness so the host sends the session token.
+    // Flutter (top-level webview): the host injects the session via
+    // window.postMessage after load — the 'message' listener above handles both.
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: 'eesa:plugin-ready', plugin: 'attendance' }, '*');
+    }
+  </script>
+</body>
+</html>

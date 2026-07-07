@@ -1,0 +1,17 @@
+{
+  "name": "eesa-plugin-attendance",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Eesa attendance plugin — geofence check-in, MCP + REST + embedded UI, on Coolify + Supabase.",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node --check src/server.js && node --check src/auth.js && node --check src/db.js && node --check src/mcp.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "jose": "^5.9.0",
+    "pg": "^8.12.0"
+  }
+}
