@@ -158,6 +158,28 @@ app.delete('/api/admin/zones/:id', manager, async (req, res) =>
   res.json({ ok: true, data: await db.deleteZone(req.ctx.tenantId, req.params.id) }));
 app.get('/api/admin/presence', manager, async (req, res) => res.json({ ok: true, data: await db.presence(req.ctx.tenantId) }));
 
+// Approvals: the manager reviews day summaries and approves/rejects them.
+app.get('/api/admin/approvals', manager, async (req, res) =>
+  res.json({ ok: true, data: await db.listApprovals(req.ctx.tenantId, {
+    from: req.query.from || null, to: req.query.to || null, status: req.query.status || null,
+  }) }));
+app.post('/api/admin/approvals', manager, async (req, res) => {
+  const { employeeRef, day, status = 'approved' } = req.body || {};
+  if (!employeeRef || !day) return res.status(400).json({ ok: false, error: 'employeeRef and day required' });
+  res.json({ ok: true, data: await db.setApproval(req.ctx.tenantId, employeeRef, day, status, req.ctx.sub) });
+});
+
+// Manual entry: log an event on a staff member's behalf (fallback / correction).
+app.post('/api/admin/manual-entry', manager, async (req, res) => {
+  const { employeeRef, type = 'check_in', at = null } = req.body || {};
+  if (!employeeRef) return res.status(400).json({ ok: false, error: 'employeeRef required' });
+  res.json({ ok: true, data: await db.manualEntry(req.ctx.tenantId, employeeRef, type, at) });
+});
+
+// EOD report — per-employee hours + approved pay (the QuickBooks export basis).
+app.get('/api/admin/report', manager, async (req, res) =>
+  res.json({ ok: true, data: await db.report(req.ctx.tenantId, { from: req.query.from || null, to: req.query.to || null }) }));
+
 // ---- Embedded UI: static shell + a context endpoint (UI session token) ----
 app.get('/app', (req, res) => res.sendFile(join(__dirname, '..', 'public', 'app.html')));
 app.get('/api/ui/context', authMiddleware({ surface: 'ui' }), async (req, res) => {

@@ -269,3 +269,97 @@ export async function setTenantTimezone(tenantId, timezone) {
   );
   return { timezone };
 }
+
+// ---- approvals + reporting (manager) --------------------------------------
+// Day summaries for a period, annotated with the member's name — the approval
+// queue the manager acts on. Filter by date range and/or approval status.
+export async function listApprovals(tenantId, { from = null, to = null, status = null } = {}) {
+  const params = [tenantId];
+  const clauses = ['ds.tenant_id = $1'];
+  if (from) { params.push(from); clauses.push(`ds.day >= $${params.length}`); }
+  if (to) { params.push(to); clauses.push(`ds.day <= $${params.length}`); }
+  if (status) { params.push(status); clauses.push(`ds.approval_status = $${params.length}`); }
+  const rows = await q(
+    `select ds.employee_ref, ds.day, ds.first_in, ds.last_out, ds.total_minutes,
+            ds.approval_status, ds.approved_by, ds.approved_at,
+            coalesce(m.name, '') as name, m.pay_rate
+       from day_summaries ds
+       left join memberships m on m.tenant_id = ds.tenant_id and m.employee_ref = ds.employee_ref
+      where ${clauses.join(' and ')}
+      order by ds.day desc, name`,
+    params,
+  );
+  return rows.map((r) => ({
+    employeeRef: r.employee_ref,
+    name: r.name,
+    day: dayStr(r.day),
+    firstIn: iso(r.first_in),
+    lastOut: iso(r.last_out),
+    totalMinutes: Number(r.total_minutes || 0),
+    approvalStatus: r.approval_status || 'pending',
+    approvedBy: r.approved_by || null,
+    approvedAt: iso(r.approved_at),
+    payRate: r.pay_rate == null ? null : Number(r.pay_rate),
+  }));
+}
+
+export async function setApproval(tenantId, employeeRef, day, status, approvedBy) {
+  const st = ['approved', 'rejected', 'pending'].includes(status) ? status : 'pending';
+  await q(
+    `update day_summaries
+        set approval_status = $4,
+            approved_by = case when $4 = 'pending' then null else $5 end,
+            approved_at = case when $4 = 'pending' then null else now() end,
+            updated_at = now()
+      where tenant_id = $1 and employee_ref = $2 and day = $3`,
+    [tenantId, employeeRef, day, st, approvedBy],
+  );
+  return { employeeRef: String(employeeRef), day: String(day), approvalStatus: st };
+}
+
+// Admin logs an event on a staff member's behalf (fallback / correction).
+// NOTE: recomputes today's summary; a back-dated entry to a prior day is stored
+// but that day's summary is recomputed lazily (v1 limitation).
+export async function manualEntry(tenantId, employeeRef, type, at = null) {
+  const t = type === 'check_out' ? 'check_out' : 'check_in';
+  await q(
+    `insert into events (tenant_id, employee_ref, type, at, for_work, source)
+     values ($1, $2, $3, coalesce($4::timestamptz, now()), true, 'manual')`,
+    [tenantId, employeeRef, t, at],
+  );
+  await upsertDaySummary(tenantId, employeeRef);
+  return { employeeRef: String(employeeRef), type: t };
+}
+
+// Per-employee totals for a period — the EOD report + the QBO export basis.
+export async function report(tenantId, { from = null, to = null } = {}) {
+  const params = [tenantId];
+  const clauses = ['ds.tenant_id = $1'];
+  if (from) { params.push(from); clauses.push(`ds.day >= $${params.length}`); }
+  if (to) { params.push(to); clauses.push(`ds.day <= $${params.length}`); }
+  const rows = await q(
+    `select ds.employee_ref, coalesce(m.name, '') as name, m.pay_rate,
+            sum(ds.total_minutes) as total_minutes,
+            sum(case when ds.approval_status = 'approved' then ds.total_minutes else 0 end) as approved_minutes,
+            count(*) as days
+       from day_summaries ds
+       left join memberships m on m.tenant_id = ds.tenant_id and m.employee_ref = ds.employee_ref
+      where ${clauses.join(' and ')}
+      group by ds.employee_ref, m.name, m.pay_rate
+      order by name`,
+    params,
+  );
+  return rows.map((r) => {
+    const approvedMinutes = Number(r.approved_minutes || 0);
+    const rate = r.pay_rate == null ? null : Number(r.pay_rate);
+    return {
+      employeeRef: r.employee_ref,
+      name: r.name,
+      days: Number(r.days || 0),
+      totalMinutes: Number(r.total_minutes || 0),
+      approvedMinutes,
+      payRate: rate,
+      approvedPay: rate == null ? null : Math.round((approvedMinutes / 60) * rate * 100) / 100,
+    };
+  });
+}
