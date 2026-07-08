@@ -4,6 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Attendance</title>
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+  <script src="/vendor/leaflet/leaflet.js"></script>
   <style>
     :root { --bg:#0f1b21; --card:#16262e; --line:#233842; --ink:#e9f3f4; --muted:#8aa0a8; --accent:#2db4be; --accent-ink:#04222a; --danger:#e0705e; --ok:#5fd08a; }
     @media (prefers-color-scheme: light){ :root{ --bg:#f4f8f8; --card:#fff; --line:#dce6e6; --ink:#0d1d23; --muted:#657a82; --accent:#178a94; --accent-ink:#fff; } }
@@ -38,6 +40,13 @@
     .big { font-size:1.5rem; font-weight:700; }
     .toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); background:var(--card); border:1px solid var(--line); padding:9px 14px; border-radius:10px; font-size:.85rem; box-shadow:0 6px 24px rgba(0,0,0,.25); opacity:0; transition:opacity .2s; pointer-events:none; }
     .toast.show { opacity:1; }
+    /* Zone map */
+    #zmap { height:320px; border-radius:10px; border:1px solid var(--line); margin-bottom:10px; z-index:0; }
+    #zmap .leaflet-container { background:var(--bg); font:inherit; }
+    .zpin { width:16px; height:16px; box-sizing:border-box; border-radius:50%; background:var(--accent); border:2px solid #fff; box-shadow:0 0 0 1px var(--accent); cursor:grab; }
+    .zhandle { width:14px; height:14px; box-sizing:border-box; border-radius:50%; background:#fff; border:2px solid var(--accent); cursor:ew-resize; }
+    .leaflet-container a.leaflet-popup-close-button { color:var(--muted); }
+    .map-hint { font-size:.72rem; color:var(--muted); margin:-4px 0 8px; }
   </style>
 </head>
 <body>
@@ -252,6 +261,7 @@
     // ---------------- Manager: Zones ----------------
     VIEWS.zones = async () => {
       const zones = await api('/api/admin/zones');
+      const hasMap = typeof window.L !== 'undefined';
       $('view').innerHTML = `<div class="card"><h2>Work zones</h2>
         <div id="zlist">${zones.length ? `<table><tr><th>Name</th><th>Radius</th><th>Location</th><th></th></tr>
           ${zones.map((z) => `<tr><td>${esc(z.name)}</td><td>${Math.round(z.radiusM)} m</td><td class="muted">${z.lat.toFixed(4)}, ${z.lng.toFixed(4)}</td>
@@ -259,22 +269,83 @@
         <div class="card"><h2>Add zone</h2>
           <div class="row"><input id="zn" placeholder="Zone name" style="flex:1">
             <button class="btn" id="zloc">Use my location</button></div>
+          ${hasMap ? '<div id="zmap"></div><div class="map-hint">Click the map to drop the zone, drag the dot to move it, drag the small white handle to resize.</div>' : ''}
           <div class="row" style="margin-top:8px"><input id="zlat" placeholder="lat" style="width:110px"><input id="zlng" placeholder="lng" style="width:110px">
-            <input id="zr" type="number" value="100" style="width:90px"> m
+            <input id="zr" type="number" value="100" min="10" step="10" style="width:90px"> m
             <button class="btn primary" id="zadd">Add</button></div>
           <div id="zloc-msg" class="muted" style="font-size:.75rem;margin-top:6px"></div></div>`;
       $('zlist').querySelectorAll('button[data-z]').forEach((b) => b.onclick = async () => {
         try { await api('/api/admin/zones/' + encodeURIComponent(b.dataset.z), { method: 'DELETE' }); toast('Removed'); go('zones'); } catch (e) { toast(e.message, true); }
       });
+
+      // ---- interactive map picker (graceful fallback to coordinate entry) ----
+      let pin = null, ring = null, handle = null;
+      const radiusVal = () => Math.max(10, Number($('zr').value) || 100);
+      // A latLng `r` metres due-east of `c` — where the resize handle sits.
+      const eastEdge = (c, r) => L.latLng(c.lat, c.lng + r / ((111320 * Math.cos(c.lat * Math.PI / 180)) || 1));
+
+      if (hasMap) {
+        const map = L.map('zmap');
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19, attribution: '&copy; OpenStreetMap contributors',
+        }).addTo(map);
+        const pts = [];
+        zones.forEach((z) => {
+          L.circle([z.lat, z.lng], { radius: z.radiusM, color: '#8aa0a8', weight: 1, fillOpacity: .08 })
+            .addTo(map).bindTooltip(z.name);
+          pts.push([z.lat, z.lng]);
+        });
+        if (pts.length) map.fitBounds(pts, { padding: [40, 40], maxZoom: 16 });
+        else map.setView([20, 0], 2);
+        setTimeout(() => map.invalidateSize(), 0); // container was just injected
+
+        const pinIcon = L.divIcon({ className: '', html: '<div class="zpin"></div>', iconSize: [16, 16], iconAnchor: [8, 8] });
+        const handleIcon = L.divIcon({ className: '', html: '<div class="zhandle"></div>', iconSize: [14, 14], iconAnchor: [7, 7] });
+        const syncInputs = () => {
+          const c = pin.getLatLng();
+          $('zlat').value = c.lat.toFixed(6);
+          $('zlng').value = c.lng.toFixed(6);
+        };
+        const place = (latlng, fly) => {
+          const r = radiusVal();
+          if (!pin) {
+            pin = L.marker(latlng, { draggable: true, icon: pinIcon }).addTo(map);
+            ring = L.circle(latlng, { radius: r, color: '#2db4be', weight: 2, fillColor: '#2db4be', fillOpacity: .12 }).addTo(map);
+            handle = L.marker(eastEdge(latlng, r), { draggable: true, icon: handleIcon }).addTo(map);
+            pin.on('drag', () => { const c = pin.getLatLng(); ring.setLatLng(c); handle.setLatLng(eastEdge(c, ring.getRadius())); syncInputs(); });
+            handle.on('drag', () => {
+              const nr = Math.max(10, Math.round(pin.getLatLng().distanceTo(handle.getLatLng())));
+              ring.setRadius(nr); $('zr').value = nr; // handle lies on the ring by definition (r == distance)
+            });
+          } else {
+            pin.setLatLng(latlng); ring.setLatLng(latlng).setRadius(r); handle.setLatLng(eastEdge(latlng, r));
+          }
+          syncInputs();
+          if (fly) map.setView(latlng, Math.max(map.getZoom(), 16));
+        };
+        map.on('click', (e) => place(e.latlng));
+        // radius typed → resize ring + move handle to the east edge
+        $('zr').oninput = () => { if (ring) { ring.setRadius(radiusVal()); handle.setLatLng(eastEdge(pin.getLatLng(), radiusVal())); } };
+        // coordinates typed → move/create the pin
+        const fromInputs = () => { const la = Number($('zlat').value), ln = Number($('zlng').value); if ($('zlat').value && $('zlng').value && !isNaN(la) && !isNaN(ln)) place(L.latLng(la, ln), true); };
+        $('zlat').onchange = fromInputs; $('zlng').onchange = fromInputs;
+        window.__zplace = place; // used by "Use my location"
+      }
+
       $('zloc').onclick = () => {
         $('zloc-msg').textContent = 'Locating…';
         navigator.geolocation.getCurrentPosition(
-          (p) => { $('zlat').value = p.coords.latitude.toFixed(6); $('zlng').value = p.coords.longitude.toFixed(6); $('zloc-msg').textContent = 'Location set.'; },
+          (p) => {
+            const la = p.coords.latitude, ln = p.coords.longitude;
+            $('zlat').value = la.toFixed(6); $('zlng').value = ln.toFixed(6);
+            $('zloc-msg').textContent = 'Location set — adjust on the map if needed.';
+            if (hasMap && window.__zplace) window.__zplace(L.latLng(la, ln), true);
+          },
           (e) => { $('zloc-msg').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; });
       };
       $('zadd').onclick = async () => {
-        const name = $('zn').value.trim(), lat = Number($('zlat').value), lng = Number($('zlng').value), radius = Number($('zr').value) || 100;
-        if (!name || !$('zlat').value || !$('zlng').value) return toast('Name + location required', true);
+        const name = $('zn').value.trim(), lat = Number($('zlat').value), lng = Number($('zlng').value), radius = radiusVal();
+        if (!name || !$('zlat').value || !$('zlng').value) return toast('Name + a point on the map required', true);
         try { await api('/api/admin/zones', { method: 'POST', body: { name, lat, lng, radius } }); toast('Zone added'); go('zones'); } catch (e) { toast(e.message, true); }
       };
     };

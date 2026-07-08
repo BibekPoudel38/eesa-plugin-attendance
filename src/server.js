@@ -26,6 +26,12 @@ app.use((req, res, next) => {
   next();
 });
 
+// Self-hosted front-end vendor assets (Leaflet for the zone map), served at
+// /vendor/* so app.html can load them same-origin (no CDN dependency).
+app.use('/vendor', express.static(join(__dirname, '..', 'public', 'vendor'), {
+  maxAge: '30d', immutable: true,
+}));
+
 app.get('/health', (req, res) => res.json({ ok: true, plugin: MANIFEST.slug }));
 app.get('/manifest', (req, res) => res.json(MANIFEST));
 
