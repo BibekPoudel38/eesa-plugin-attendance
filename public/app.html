@@ -7,55 +7,216 @@
   <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
   <script src="/vendor/leaflet/leaflet.js"></script>
   <style>
-    :root { --bg:#0f1b21; --card:#16262e; --line:#233842; --ink:#e9f3f4; --muted:#8aa0a8; --accent:#2db4be; --accent-ink:#04222a; --danger:#e0705e; --ok:#5fd08a; }
-    @media (prefers-color-scheme: light){ :root{ --bg:#f4f8f8; --card:#fff; --line:#dce6e6; --ink:#0d1d23; --muted:#657a82; --accent:#178a94; --accent-ink:#fff; } }
+    /* ---- Theme tokens. Light is the base; dark applies when the host asks
+           (data-theme="dark") or, before the host message arrives, when the OS
+           prefers dark. The host (Flutter/React) sends the phone's theme over
+           the postMessage bridge, so the plugin always matches the app. ---- */
+    :root {
+      color-scheme: light dark;
+      --bg:#eef3f4;
+      --grad: radial-gradient(1100px 460px at 50% -160px, rgba(15,139,150,.14), transparent 72%);
+      --card:#ffffff; --card-2:#eef3f5; --line:#e0e9eb;
+      --ink:#0d1d23; --muted:#5f7480; --faint:#8fa2ab;
+      --primary:#0f8b96; --primary-ink:#fff; --primary-weak:rgba(15,139,150,.12);
+      --success:#159a63; --success-weak:rgba(21,154,99,.14);
+      --warn:#b9820f; --warn-weak:rgba(185,130,15,.16);
+      --danger:#d24b38; --danger-weak:rgba(210,75,56,.14);
+      --shadow:0 1px 2px rgba(16,40,48,.05), 0 10px 30px rgba(16,40,48,.07);
+      --radius:16px; --radius-sm:11px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg:#0c161b;
+        --grad: radial-gradient(1100px 460px at 50% -160px, rgba(45,180,190,.16), transparent 72%);
+        --card:#14232b; --card-2:#0f1d24; --line:#233a44;
+        --ink:#e9f3f4; --muted:#8fa8b1; --faint:#5f7783;
+        --primary:#2db4be; --primary-ink:#04222a; --primary-weak:rgba(45,180,190,.16);
+        --success:#4fd08a; --success-weak:rgba(79,208,138,.16);
+        --warn:#e6c15e; --warn-weak:rgba(230,193,94,.16);
+        --danger:#e0705e; --danger-weak:rgba(224,112,94,.16);
+        --shadow:0 1px 2px rgba(0,0,0,.3), 0 12px 34px rgba(0,0,0,.34);
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg:#0c161b;
+      --grad: radial-gradient(1100px 460px at 50% -160px, rgba(45,180,190,.16), transparent 72%);
+      --card:#14232b; --card-2:#0f1d24; --line:#233a44;
+      --ink:#e9f3f4; --muted:#8fa8b1; --faint:#5f7783;
+      --primary:#2db4be; --primary-ink:#04222a; --primary-weak:rgba(45,180,190,.16);
+      --success:#4fd08a; --success-weak:rgba(79,208,138,.16);
+      --warn:#e6c15e; --warn-weak:rgba(230,193,94,.16);
+      --danger:#e0705e; --danger-weak:rgba(224,112,94,.16);
+      --shadow:0 1px 2px rgba(0,0,0,.3), 0 12px 34px rgba(0,0,0,.34);
+    }
+
     * { box-sizing: border-box; }
-    body { margin:0; font-family: system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--ink); }
-    header { padding:14px 18px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:10px; }
-    h1 { font-size:1.05rem; margin:0; }
-    .who { color:var(--muted); font-size:.8rem; text-align:right; }
-    nav { display:flex; gap:6px; padding:10px 14px; overflow-x:auto; border-bottom:1px solid var(--line); }
-    nav button { background:transparent; border:1px solid var(--line); color:var(--muted); padding:6px 12px; border-radius:999px; font-size:.82rem; white-space:nowrap; cursor:pointer; }
-    nav button.active { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
-    main { padding:16px; max-width:820px; margin:0 auto; }
-    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
-    .card h2 { margin:0 0 10px; font-size:.78rem; color:var(--accent); text-transform:uppercase; letter-spacing:.06em; }
+    html, body { height:100%; }
+    body {
+      margin:0; color:var(--ink);
+      background:var(--grad), var(--bg); background-attachment:fixed;
+      font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+    }
+    .ic { width:1em; height:1em; flex:none; vertical-align:-.12em; }
+
+    /* Header */
+    header {
+      position:sticky; top:0; z-index:5;
+      display:flex; align-items:center; justify-content:space-between; gap:12px;
+      padding:14px 18px; background:color-mix(in srgb, var(--bg) 82%, transparent);
+      backdrop-filter:saturate(1.4) blur(10px); border-bottom:1px solid var(--line);
+    }
+    .brand { display:flex; align-items:center; gap:10px; font-weight:750; letter-spacing:-.01em; }
+    .brand .logo {
+      width:30px; height:30px; border-radius:9px; display:grid; place-items:center;
+      background:var(--primary); color:var(--primary-ink); font-size:1rem;
+    }
+    .brand h1 { font-size:1.02rem; margin:0; font-weight:750; }
+    .whochip { display:flex; align-items:center; gap:9px; }
+    .whochip .avatar {
+      width:32px; height:32px; border-radius:50%; display:grid; place-items:center;
+      background:var(--primary-weak); color:var(--primary); font-weight:700; font-size:.82rem;
+    }
+    .whochip .meta { text-align:right; line-height:1.15; }
+    .whochip .nm { font-size:.82rem; font-weight:650; }
+    .whochip .rl { font-size:.68rem; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+
+    /* Nav */
+    nav { display:flex; gap:7px; padding:12px 14px 4px; overflow-x:auto; scrollbar-width:none; }
+    nav::-webkit-scrollbar { display:none; }
+    nav button {
+      display:inline-flex; align-items:center; gap:7px; white-space:nowrap; cursor:pointer;
+      background:var(--card); border:1px solid var(--line); color:var(--muted);
+      padding:8px 14px; border-radius:999px; font-size:.83rem; font-weight:600;
+      transition:all .15s ease; box-shadow:var(--shadow);
+    }
+    nav button:hover { color:var(--ink); }
+    nav button.active { background:var(--primary); color:var(--primary-ink); border-color:transparent; }
+    nav button .ic { width:15px; height:15px; }
+
+    main { padding:14px 16px 40px; max-width:860px; margin:0 auto; }
+    .fade { animation:fade .28s ease; }
+    @keyframes fade { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+
+    /* Cards */
+    .card {
+      background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+      padding:16px; margin-bottom:14px; box-shadow:var(--shadow);
+    }
+    .card > h2 {
+      margin:0 0 12px; font-size:.72rem; color:var(--muted);
+      text-transform:uppercase; letter-spacing:.08em; font-weight:700;
+      display:flex; align-items:center; gap:7px;
+    }
+    .card > h2 .ic { color:var(--primary); width:15px; height:15px; }
+    .lead { margin:0 0 12px; color:var(--muted); font-size:.86rem; line-height:1.45; }
+
+    /* Hero (staff status) */
+    .hero {
+      position:relative; overflow:hidden; border-radius:var(--radius);
+      padding:22px; margin-bottom:14px; border:1px solid var(--line);
+      background:var(--card); box-shadow:var(--shadow);
+    }
+    .hero--on { background:linear-gradient(135deg,#12a06a,#0f8b96 92%); color:#fff; border-color:transparent; }
+    .hero__top { display:flex; align-items:center; gap:12px; }
+    .hero__badge {
+      width:46px; height:46px; border-radius:13px; display:grid; place-items:center;
+      background:var(--primary-weak); color:var(--primary); font-size:1.3rem;
+    }
+    .hero--on .hero__badge { background:rgba(255,255,255,.2); color:#fff; }
+    .hero__state { font-size:1.5rem; font-weight:800; letter-spacing:-.02em; line-height:1.1; }
+    .hero__sub { font-size:.9rem; opacity:.82; margin-top:2px; }
+    .stats { display:flex; gap:10px; margin-top:18px; }
+    .stat { flex:1; border-radius:var(--radius-sm); padding:12px 14px; background:var(--card-2); }
+    .hero--on .stat { background:rgba(255,255,255,.14); }
+    .stat__num { font-size:1.35rem; font-weight:800; letter-spacing:-.02em; }
+    .stat__lbl { font-size:.68rem; opacity:.82; text-transform:uppercase; letter-spacing:.05em; margin-top:2px; }
+    .pulse { width:9px; height:9px; border-radius:50%; background:#fff; box-shadow:0 0 0 0 rgba(255,255,255,.7); animation:pulse 1.8s infinite; display:inline-block; margin-left:8px; vertical-align:middle; }
+    @keyframes pulse { 70% { box-shadow:0 0 0 9px rgba(255,255,255,0); } 100% { box-shadow:0 0 0 0 rgba(255,255,255,0); } }
+
+    /* Tables */
     table { width:100%; border-collapse:collapse; font-size:.86rem; }
-    td, th { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:middle; }
-    th { color:var(--muted); font-weight:600; font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; }
+    thead th {
+      text-align:left; padding:8px 10px; color:var(--faint); font-weight:700;
+      font-size:.68rem; text-transform:uppercase; letter-spacing:.05em;
+      border-bottom:1px solid var(--line);
+    }
+    tbody td { padding:10px; border-bottom:1px solid var(--line); vertical-align:middle; }
+    tbody tr:last-child td { border-bottom:none; }
+    tbody tr { transition:background .12s; }
+    tbody tr:hover { background:var(--card-2); }
+    .num { font-variant-numeric:tabular-nums; }
+
+    /* List rows (history / zones as chips) */
+    .rowitem { display:flex; align-items:center; gap:12px; padding:12px 4px; border-bottom:1px solid var(--line); }
+    .rowitem:last-child { border-bottom:none; }
+    .rowitem .lead-ic { width:34px; height:34px; border-radius:10px; background:var(--primary-weak); color:var(--primary); display:grid; place-items:center; flex:none; }
+    .rowitem .grow { flex:1; min-width:0; }
+    .chips { display:flex; flex-wrap:wrap; gap:8px; }
+    .chip { display:inline-flex; align-items:center; gap:7px; padding:7px 12px; border-radius:999px; background:var(--card-2); border:1px solid var(--line); font-size:.82rem; }
+    .chip .ic { color:var(--primary); width:15px; height:15px; }
+
     .muted { color:var(--muted); }
     .err { color:var(--danger); }
-    .ok { color:var(--ok); }
-    input, select, button.btn { font:inherit; font-size:.85rem; padding:7px 9px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--ink); }
-    button.btn { cursor:pointer; }
-    button.btn.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
-    button.btn.small { padding:4px 8px; font-size:.78rem; }
-    button.btn.link { background:transparent; border:none; color:var(--accent); padding:2px 4px; cursor:pointer; }
-    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-    .field { display:flex; flex-direction:column; gap:4px; font-size:.75rem; color:var(--muted); }
-    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:.72rem; font-weight:600; }
-    .pill.pending { background:rgba(224,196,94,.18); color:#e0c45e; }
-    .pill.approved { background:rgba(95,208,138,.18); color:var(--ok); }
-    .pill.rejected { background:rgba(224,112,94,.18); color:var(--danger); }
-    .big { font-size:1.5rem; font-weight:700; }
-    .toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); background:var(--card); border:1px solid var(--line); padding:9px 14px; border-radius:10px; font-size:.85rem; box-shadow:0 6px 24px rgba(0,0,0,.25); opacity:0; transition:opacity .2s; pointer-events:none; }
-    .toast.show { opacity:1; }
+    .ok { color:var(--success); }
+    .empty { text-align:center; color:var(--muted); padding:26px 10px; font-size:.88rem; }
+    .empty .ic { width:26px; height:26px; opacity:.5; display:block; margin:0 auto 8px; }
+
+    /* Inputs / buttons */
+    input, select {
+      font:inherit; font-size:.86rem; padding:9px 11px; border-radius:10px;
+      border:1px solid var(--line); background:var(--card-2); color:var(--ink); width:100%;
+    }
+    input:focus, select:focus { outline:none; border-color:var(--primary); box-shadow:0 0 0 3px var(--primary-weak); }
+    .btn {
+      font:inherit; font-size:.85rem; font-weight:650; padding:9px 14px; border-radius:10px;
+      border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer;
+      display:inline-flex; align-items:center; gap:7px; transition:all .14s;
+    }
+    .btn:hover { border-color:var(--primary); }
+    .btn.primary { background:var(--primary); color:var(--primary-ink); border-color:transparent; }
+    .btn.primary:hover { filter:brightness(1.06); }
+    .btn.small { padding:6px 10px; font-size:.78rem; }
+    .btn.link { background:transparent; border:none; color:var(--primary); padding:4px 6px; font-weight:650; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .field { display:flex; flex-direction:column; gap:5px; font-size:.72rem; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+    .field input, .field select { width:auto; text-transform:none; font-weight:400; letter-spacing:0; }
+
+    .pill { display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border-radius:999px; font-size:.72rem; font-weight:700; text-transform:capitalize; }
+    .pill.pending, .pill.open, .pill.incomplete { background:var(--warn-weak); color:var(--warn); }
+    .pill.approved, .pill.complete { background:var(--success-weak); color:var(--success); }
+    .pill.rejected { background:var(--danger-weak); color:var(--danger); }
+
+    .toast {
+      position:fixed; left:50%; bottom:22px; transform:translate(-50%,10px); z-index:50;
+      background:var(--card); border:1px solid var(--line); padding:11px 16px; border-radius:12px;
+      font-size:.86rem; font-weight:600; box-shadow:var(--shadow); opacity:0; pointer-events:none;
+      transition:opacity .2s, transform .2s;
+    }
+    .toast.show { opacity:1; transform:translate(-50%,0); }
+    .toast.err { border-color:var(--danger); color:var(--danger); }
+
     /* Zone map */
-    #zmap { height:320px; border-radius:10px; border:1px solid var(--line); margin-bottom:10px; z-index:0; }
-    #zmap .leaflet-container { background:var(--bg); font:inherit; }
-    .zpin { width:16px; height:16px; box-sizing:border-box; border-radius:50%; background:var(--accent); border:2px solid #fff; box-shadow:0 0 0 1px var(--accent); cursor:grab; }
-    .zhandle { width:14px; height:14px; box-sizing:border-box; border-radius:50%; background:#fff; border:2px solid var(--accent); cursor:ew-resize; }
-    .leaflet-container a.leaflet-popup-close-button { color:var(--muted); }
-    .map-hint { font-size:.72rem; color:var(--muted); margin:-4px 0 8px; }
+    #zmap { height:340px; border-radius:var(--radius-sm); border:1px solid var(--line); margin-bottom:10px; z-index:0; }
+    #zmap .leaflet-container { background:var(--card-2); font:inherit; }
+    :root[data-theme="dark"] #zmap .leaflet-tile,
+    :root:not([data-theme="light"]) #zmap .leaflet-tile { filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.9); }
+    @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) #zmap .leaflet-tile { filter:none; } }
+    .zpin { width:16px; height:16px; box-sizing:border-box; border-radius:50%; background:var(--primary); border:2px solid #fff; box-shadow:0 0 0 1px var(--primary); cursor:grab; }
+    .zhandle { width:14px; height:14px; box-sizing:border-box; border-radius:50%; background:#fff; border:2px solid var(--primary); cursor:ew-resize; }
+    .map-hint { font-size:.74rem; color:var(--muted); margin:-2px 0 10px; }
   </style>
 </head>
 <body>
   <header>
-    <h1 id="title">Attendance</h1>
-    <span class="who" id="who">connecting…</span>
+    <div class="brand">
+      <span class="logo">✦</span>
+      <h1>Attendance</h1>
+    </div>
+    <div class="whochip" id="who"><span class="muted" style="font-size:.82rem">connecting…</span></div>
   </header>
   <nav id="nav"></nav>
-  <main id="view"><div class="muted">Loading…</div></main>
+  <main id="view"><div class="empty">Loading…</div></main>
   <div class="toast" id="toast"></div>
 
   <script>
@@ -64,13 +225,41 @@
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
     const hrs = (m) => (Number(m || 0) / 60).toFixed(1);
     const timeOf = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+    const dateNice = (s) => { if (!s) return '—'; const d = new Date(s + 'T00:00:00'); return isNaN(d) ? s : d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }); };
     const today = () => new Date().toISOString().slice(0, 10);
     const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+    const initials = (s) => (String(s || '?').trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join('') || '?').toUpperCase();
+
+    // ---- inline icon set (stroke, currentColor) ----
+    const ICONS = {
+      clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+      check: '<path d="M20 6L9 17l-5-5"/>',
+      pin: '<path d="M12 21s-6-5.7-6-10a6 6 0 0 1 12 0c0 4.3-6 10-6 10z"/><circle cx="12" cy="11" r="2"/>',
+      user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+      users: '<circle cx="9" cy="8" r="3.4"/><path d="M2.6 21a6.4 6.4 0 0 1 12.8 0"/><path d="M16.2 5.6a3.4 3.4 0 0 1 0 6.6"/><path d="M18.4 21a6.4 6.4 0 0 0-3-5.4"/>',
+      calendar: '<rect x="3" y="4.5" width="18" height="17" rx="2"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/>',
+      chart: '<path d="M3 21h18"/><path d="M6.5 21v-6M12 21V6M17.5 21v-4"/>',
+      sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+      activity: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
+      checkCircle: '<circle cx="12" cy="12" r="9"/><path d="M8.4 12.4l2.6 2.6 4.6-5.2"/>',
+      history: '<path d="M3.2 12a8.8 8.8 0 1 0 2.8-6.4L3 8"/><path d="M3 3.5V8h4.5"/><path d="M12 8v4.2l3 1.8"/>',
+      inbox: '<path d="M4 13l2.5-8h11L20 13"/><path d="M4 13h5l1 2h4l1-2h5v6H4z"/>',
+    };
+    const ic = (n) => `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[n] || ICONS.clock}</svg>`;
+    const empty = (icon, msg) => `<div class="empty">${ic(icon)}${esc(msg)}</div>`;
 
     let toastTimer;
     function toast(msg, isErr) {
-      const t = $('toast'); t.textContent = msg; t.style.borderColor = isErr ? 'var(--danger)' : 'var(--line)';
+      const t = $('toast'); t.textContent = msg; t.classList.toggle('err', !!isErr);
       t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+    }
+
+    // ---- theme: honor the host's light/dark (falls back to prefers-color-scheme) ----
+    function applyTheme(t) {
+      if (t === 'dark' || t === 'light') {
+        document.documentElement.dataset.theme = t;
+        if (window.__zmap) setTimeout(() => window.__zmap.invalidateSize(), 60);
+      }
     }
 
     async function apiFull(path, { method = 'GET', body = null } = {}) {
@@ -81,66 +270,136 @@
       if (!r.ok || j.ok === false) throw new Error((j.error && (j.error.message || j.error)) || ('HTTP ' + r.status));
       return j; // whole envelope: { ok, data, diag? }
     }
-    async function api(path, opts) { return (await apiFull(path, opts)).data; }
+    const api = async (path, opts) => (await apiFull(path, opts)).data;
 
-    const MANAGER_TABS = [
-      ['team', 'Team'], ['schedule', 'Schedule'], ['approvals', 'Approvals'], ['report', 'Report'],
-      ['zones', 'Zones'], ['presence', 'Who’s in'], ['settings', 'Settings'],
-    ];
-    const STAFF_TABS = [['me', 'My attendance'], ['history', 'History']];
+    const TABS = {
+      team: ['Team', 'users'], schedule: ['Schedule', 'calendar'], approvals: ['Approvals', 'checkCircle'],
+      report: ['Report', 'chart'], zones: ['Zones', 'pin'], presence: ["Who's in", 'activity'],
+      settings: ['Settings', 'sliders'], me: ['My attendance', 'user'], history: ['History', 'history'],
+    };
+    const MANAGER_TABS = ['team', 'schedule', 'approvals', 'report', 'zones', 'presence', 'settings'];
+    const STAFF_TABS = ['me', 'history'];
 
     async function boot() {
       try {
         CTX = await api('/api/ui/context');
-        $('who').textContent = (CTX.name || '') + (CTX.role ? ' · ' + CTX.role : '');
+        const nm = CTX.name || 'You';
+        $('who').innerHTML = `<div class="meta"><div class="nm">${esc(nm)}</div>${CTX.role ? `<div class="rl">${esc(CTX.role)}</div>` : ''}</div><div class="avatar">${esc(initials(nm))}</div>`;
         if (!CTX.role) {
           $('nav').innerHTML = '';
-          $('view').innerHTML = '<div class="card"><h2>No access</h2><p class="muted">You are not enrolled in attendance. Ask your manager to add you.</p></div>';
+          $('view').innerHTML = `<div class="card">${empty('inbox', 'You’re not enrolled in attendance yet. Ask your manager to add you to the team.')}</div>`;
           return;
         }
         const tabs = CTX.role === 'manager' ? MANAGER_TABS : STAFF_TABS;
-        $('nav').innerHTML = tabs.map(([k, l]) => `<button data-tab="${k}">${l}</button>`).join('');
+        $('nav').innerHTML = tabs.map((k) => `<button data-tab="${k}">${ic(TABS[k][1])}<span>${TABS[k][0]}</span></button>`).join('');
         $('nav').querySelectorAll('button').forEach((b) => b.onclick = () => go(b.dataset.tab));
-        go(tabs[0][0]);
+        go(tabs[0]);
       } catch (e) {
-        $('who').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
+        $('who').innerHTML = `<span class="err" style="font-size:.8rem">${esc(e.message)}</span>`;
       }
     }
 
-    function go(tab) {
+    async function go(tab) {
       TAB = tab;
       $('nav').querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-      $('view').innerHTML = '<div class="muted">Loading…</div>';
-      (VIEWS[tab] || (() => {}))();
+      $('view').innerHTML = '<div class="empty">Loading…</div>';
+      try {
+        await (VIEWS[tab] || (() => {}))();
+        const v = $('view').firstElementChild; if (v) v.classList.add('fade');
+      } catch (e) {
+        $('view').innerHTML = `<div class="card">${empty('inbox', e.message || 'Something went wrong.')}<div style="text-align:center"><button class="btn small" id="retry">Try again</button></div></div>`;
+        const rt = $('retry'); if (rt) rt.onclick = () => go(tab);
+      }
     }
 
-    // ---------------- Manager: Team / roles ----------------
     const VIEWS = {};
+
+    // ==================== STAFF ====================
+    VIEWS.me = async () => {
+      let st = null, zones = [];
+      try { st = await api('/api/getMyStatus'); } catch (e) { throw new Error('Could not load your status: ' + e.message); }
+      try { zones = await api('/api/getMyZones'); } catch (_) { zones = []; }
+      const on = !!(st && st.checkedIn);
+      const t = (st && st.today) || null;
+      $('view').innerHTML = `
+        <div class="hero ${on ? 'hero--on' : ''}">
+          <div class="hero__top">
+            <div class="hero__badge">${ic(on ? 'check' : 'clock')}</div>
+            <div>
+              <div class="hero__state">${on ? 'Checked in' : 'Not checked in'}${on ? '<span class="pulse"></span>' : ''}</div>
+              <div class="hero__sub">${on && st.since ? 'On the clock since ' + timeOf(st.since) : 'You’re currently off the clock'}</div>
+            </div>
+          </div>
+          <div class="stats">
+            <div class="stat"><div class="stat__num num">${hrs(st && st.todayMinutes)}<span style="font-size:.8rem;font-weight:600"> h</span></div><div class="stat__lbl">Today</div></div>
+            <div class="stat"><div class="stat__num num">${t ? timeOf(t.firstIn) : '—'}</div><div class="stat__lbl">First in</div></div>
+            <div class="stat"><div class="stat__num num">${t && t.lastOut ? timeOf(t.lastOut) : '—'}</div><div class="stat__lbl">Last out</div></div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>${ic('pin')} Your work zones</h2>
+          ${zones.length
+            ? `<div class="chips">${zones.map((z) => `<span class="chip">${ic('pin')}${esc(z.name)} <span class="muted num">· ${Math.round(z.radiusM)} m</span></span>`).join('')}</div>`
+            : empty('pin', 'No work zones assigned yet.')}
+          <p class="muted" style="font-size:.78rem;margin:14px 0 0">Check-in and check-out happen automatically when you arrive at and leave a zone — from the Eesa app on your phone.</p>
+        </div>`;
+    };
+
+    VIEWS.history = async () => {
+      const data = await api('/api/getMyHistory?days=30');
+      const rows = (data && data.days) || [];             // server returns { days: [...] }
+      const totalMin = rows.reduce((a, r) => a + (Number(r.totalMinutes) || 0), 0);
+      const worked = rows.filter((r) => (Number(r.totalMinutes) || 0) > 0).length;
+      $('view').innerHTML = `
+        <div class="card">
+          <div class="stats" style="margin:0">
+            <div class="stat" style="background:var(--card-2)"><div class="stat__num num">${hrs(totalMin)}</div><div class="stat__lbl">Hours · 30d</div></div>
+            <div class="stat" style="background:var(--card-2)"><div class="stat__num num">${worked}</div><div class="stat__lbl">Days worked</div></div>
+            <div class="stat" style="background:var(--card-2)"><div class="stat__num num">${rows.length ? hrs(totalMin / Math.max(worked, 1)) : '0.0'}</div><div class="stat__lbl">Avg / day</div></div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>${ic('history')} Last 30 days</h2>
+          ${rows.length ? rows.map((r) => `
+            <div class="rowitem">
+              <div class="lead-ic">${ic('calendar')}</div>
+              <div class="grow">
+                <div style="font-weight:650">${esc(dateNice(r.date))}</div>
+                <div class="muted" style="font-size:.78rem">${timeOf(r.firstIn)} → ${r.lastOut ? timeOf(r.lastOut) : 'open'}</div>
+              </div>
+              <div style="text-align:right">
+                <div class="num" style="font-weight:700">${hrs(r.totalMinutes)} h</div>
+                ${r.status ? `<span class="pill ${esc(r.status)}">${esc(r.status)}</span>` : ''}
+              </div>
+            </div>`).join('') : empty('history', 'No attendance recorded yet. Your days will appear here once you start checking in.')}
+        </div>`;
+    };
+
+    // ==================== MANAGER ====================
     VIEWS.team = async () => {
       const resp = await apiFull('/api/admin/members');
       const rows = resp.data || [];
       const d = resp.diag;
       const banner = (rows.length === 0 && d && d.error)
         ? `<div class="card" style="border-color:var(--danger)">
-            <strong>Couldn’t load your workspace roster</strong>
-            <div style="margin-top:.4rem">${esc(d.error)}</div>
-            <div class="muted" style="font-size:.72rem;margin-top:.4rem">
-              backend: ${esc(d.apiBase)} · secret set: ${d.hasSecret} · workspace: ${esc(d.tenantId || '—')} · status: ${d.status == null ? '—' : d.status}
-            </div></div>`
-        : '';
-      $('view').innerHTML = banner + `<div class="card"><h2>Team &amp; roles</h2>
-        <p class="muted" style="margin-top:0">Assign a role to everyone who needs attendance. No role = no access. Set an hourly pay rate for the report + QuickBooks.</p>
-        <table><tr><th>Name</th><th>Role</th><th>Pay/hr</th><th></th></tr>
+            <h2 style="color:var(--danger)">${ic('inbox')} Couldn’t load your roster</h2>
+            <div>${esc(d.error)}</div>
+            <div class="muted" style="font-size:.72rem;margin-top:8px">backend: ${esc(d.apiBase)} · secret set: ${d.hasSecret} · workspace: ${esc(d.tenantId || '—')} · status: ${d.status == null ? '—' : d.status}</div>
+          </div>` : '';
+      $('view').innerHTML = banner + `<div class="card">
+        <h2>${ic('users')} Team &amp; roles</h2>
+        <p class="lead">Assign a role to everyone who needs attendance. No role = no access. Set an hourly pay rate for the report &amp; QuickBooks.</p>
+        ${rows.length ? `<table><thead><tr><th>Name</th><th>Role</th><th>Pay/hr</th><th></th></tr></thead><tbody>
         ${rows.map((u, i) => `<tr>
-          <td>${esc(u.name || u.email || u.employeeRef)}<div class="muted" style="font-size:.72rem">${esc(u.email || '')}</div></td>
+          <td><div style="font-weight:600">${esc(u.name || u.email || u.employeeRef)}</div><div class="muted" style="font-size:.74rem">${esc(u.email || '')}</div></td>
           <td><select id="r${i}">
             <option value="" ${!u.role ? 'selected' : ''}>None</option>
             <option value="staff" ${u.role === 'staff' ? 'selected' : ''}>Staff</option>
             <option value="manager" ${u.role === 'manager' ? 'selected' : ''}>Manager</option>
           </select></td>
-          <td><input id="p${i}" style="width:80px" type="number" min="0" step="0.5" value="${u.payRate == null ? '' : u.payRate}" placeholder="—"></td>
+          <td><input id="p${i}" style="width:84px" type="number" min="0" step="0.5" value="${u.payRate == null ? '' : u.payRate}" placeholder="—"></td>
           <td><button class="btn small primary" id="s${i}">Save</button></td>
-        </tr>`).join('')}</table></div>`;
+        </tr>`).join('')}</tbody></table>` : empty('users', 'No teammates found in your workspace roster.')}</div>`;
       rows.forEach((u, i) => {
         $('s' + i).onclick = async () => {
           const role = $('r' + i).value;
@@ -153,19 +412,19 @@
       });
     };
 
-    // ---------------- Manager: Schedule (optional expected hours) ----------------
     VIEWS.schedule = async () => {
       const members = (await api('/api/admin/members')).filter((m) => m.role);
-      $('view').innerHTML = `<div class="card"><h2>Set a schedule</h2>
-        <p class="muted" style="margin-top:0">Optional. Set expected hours for a person on a day; the report then compares actual vs expected.</p>
+      $('view').innerHTML = `<div class="card">
+        <h2>${ic('calendar')} Set a schedule</h2>
+        <p class="lead">Optional. Set expected hours for a person on a day; the report then compares actual vs expected.</p>
         <div class="row">
           <label class="field">Person<select id="sref">${members.map((m) => `<option value="${esc(m.employeeRef)}">${esc(m.name || m.employeeRef)}</option>`).join('') || '<option value="">No enrolled staff</option>'}</select></label>
           <label class="field">Day<input type="date" id="sday" value="${today()}"></label>
-          <label class="field">Expected hours<input id="shrs" type="number" min="0" step="0.5" value="8" style="width:90px"></label>
+          <label class="field">Expected hours<input id="shrs" type="number" min="0" step="0.5" value="8" style="width:96px"></label>
           <button class="btn primary" id="ssave" style="align-self:flex-end">Save</button>
         </div></div>
-        <div class="card"><h2>Schedules</h2>
-          <div class="row" style="margin-bottom:10px">
+        <div class="card"><h2>${ic('calendar')} Schedules</h2>
+          <div class="row" style="margin-bottom:12px">
             <label class="field">From<input type="date" id="sf" value="${daysAgo(7)}"></label>
             <label class="field">To<input type="date" id="st" value="${daysAgo(-14)}"></label>
             <button class="btn" id="sg" style="align-self:flex-end">Apply</button></div>
@@ -173,10 +432,10 @@
       const load = async () => {
         const q = new URLSearchParams({ from: $('sf').value, to: $('st').value });
         const rows = await api('/api/admin/schedules?' + q);
-        $('slist').innerHTML = rows.length ? `<table><tr><th>Name</th><th>Day</th><th>Expected</th><th></th></tr>
-          ${rows.map((r) => `<tr><td>${esc(r.name || r.employeeRef)}</td><td>${r.day}</td><td>${hrs(r.expectedMinutes)} h</td>
-          <td><button class="btn link" data-e="${esc(r.employeeRef)}" data-d="${r.day}">Remove</button></td></tr>`).join('')}</table>`
-          : '<span class="muted">No schedules in range.</span>';
+        $('slist').innerHTML = rows.length ? `<table><thead><tr><th>Name</th><th>Day</th><th>Expected</th><th></th></tr></thead><tbody>
+          ${rows.map((r) => `<tr><td>${esc(r.name || r.employeeRef)}</td><td>${esc(dateNice(r.day))}</td><td class="num">${hrs(r.expectedMinutes)} h</td>
+          <td><button class="btn link" data-e="${esc(r.employeeRef)}" data-d="${r.day}">Remove</button></td></tr>`).join('')}</tbody></table>`
+          : empty('calendar', 'No schedules in this range.');
         $('slist').querySelectorAll('button[data-e]').forEach((b) => b.onclick = async () => {
           try { await api('/api/admin/schedules/' + encodeURIComponent(b.dataset.e) + '/' + b.dataset.d, { method: 'DELETE' }); toast('Removed'); load(); }
           catch (e) { toast(e.message, true); }
@@ -191,40 +450,39 @@
       load();
     };
 
-    // ---------------- Manager: Approvals + manual entry ----------------
     VIEWS.approvals = async () => {
-      $('view').innerHTML = `<div class="card"><h2>Approvals</h2>
-        <div class="row" style="margin-bottom:10px">
+      $('view').innerHTML = `<div class="card">
+        <h2>${ic('checkCircle')} Approvals</h2>
+        <div class="row" style="margin-bottom:12px">
           <label class="field">From<input type="date" id="af" value="${daysAgo(7)}"></label>
           <label class="field">To<input type="date" id="at" value="${today()}"></label>
           <label class="field">Status<select id="as"><option value="">All</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></label>
           <button class="btn" id="ag" style="align-self:flex-end">Apply</button>
         </div>
         <div id="alist" class="muted">Loading…</div></div>
-        <div class="card"><h2>Manual entry</h2>
-          <p class="muted" style="margin-top:0">Log a check-in/out for someone as a fallback.</p>
-          <div class="row"><select id="mref"></select>
-            <select id="mtype"><option value="check_in">Check in</option><option value="check_out">Check out</option></select>
+        <div class="card"><h2>${ic('clock')} Manual entry</h2>
+          <p class="lead">Log a check-in/out for someone as a fallback.</p>
+          <div class="row"><select id="mref" style="flex:1;min-width:160px"></select>
+            <select id="mtype" style="width:auto"><option value="check_in">Check in</option><option value="check_out">Check out</option></select>
             <button class="btn primary" id="msave">Log</button></div>
         </div>`;
       const load = async () => {
         const q = new URLSearchParams({ from: $('af').value, to: $('at').value, ...($('as').value ? { status: $('as').value } : {}) });
         const rows = await api('/api/admin/approvals?' + q);
-        $('alist').innerHTML = rows.length ? `<table><tr><th>Name</th><th>Day</th><th>In</th><th>Out</th><th>Actual</th><th>Expected</th><th>Status</th><th></th></tr>
+        $('alist').innerHTML = rows.length ? `<table><thead><tr><th>Name</th><th>Day</th><th>In</th><th>Out</th><th>Actual</th><th>Exp.</th><th>Status</th><th></th></tr></thead><tbody>
           ${rows.map((r) => `<tr>
-            <td>${esc(r.name || r.employeeRef)}</td><td>${r.day}</td><td>${timeOf(r.firstIn)}</td><td>${timeOf(r.lastOut)}</td><td>${hrs(r.totalMinutes)}</td>
-            <td>${r.expectedMinutes == null ? '<span class="muted">—</span>' : hrs(r.expectedMinutes)}</td>
-            <td><span class="pill ${r.approvalStatus}">${r.approvalStatus}</span></td>
-            <td><button class="btn link" data-a="approved" data-e="${esc(r.employeeRef)}" data-d="${r.day}">Approve</button>
-                <button class="btn link" data-a="rejected" data-e="${esc(r.employeeRef)}" data-d="${r.day}">Reject</button></td>
-          </tr>`).join('')}</table>` : '<span class="muted">No records in range.</span>';
+            <td>${esc(r.name || r.employeeRef)}</td><td>${esc(dateNice(r.day))}</td><td class="num">${timeOf(r.firstIn)}</td><td class="num">${timeOf(r.lastOut)}</td><td class="num">${hrs(r.totalMinutes)}</td>
+            <td class="num">${r.expectedMinutes == null ? '<span class="muted">—</span>' : hrs(r.expectedMinutes)}</td>
+            <td><span class="pill ${esc(r.approvalStatus)}">${esc(r.approvalStatus)}</span></td>
+            <td style="white-space:nowrap"><button class="btn link" data-a="approved" data-e="${esc(r.employeeRef)}" data-d="${r.day}">Approve</button>
+                <button class="btn link" style="color:var(--danger)" data-a="rejected" data-e="${esc(r.employeeRef)}" data-d="${r.day}">Reject</button></td>
+          </tr>`).join('')}</tbody></table>` : empty('checkCircle', 'No records in this range.');
         $('alist').querySelectorAll('button[data-a]').forEach((b) => b.onclick = async () => {
           try { await api('/api/admin/approvals', { method: 'POST', body: { employeeRef: b.dataset.e, day: b.dataset.d, status: b.dataset.a } }); toast(b.dataset.a); load(); }
           catch (e) { toast(e.message, true); }
         });
       };
       $('ag').onclick = load;
-      // members for the manual-entry picker
       const members = (await api('/api/admin/members')).filter((m) => m.role);
       $('mref').innerHTML = members.map((m) => `<option value="${esc(m.employeeRef)}">${esc(m.name || m.employeeRef)}</option>`).join('') || '<option value="">No enrolled staff</option>';
       $('msave').onclick = async () => {
@@ -234,78 +492,67 @@
       load();
     };
 
-    // ---------------- Manager: Report ----------------
     VIEWS.report = async () => {
-      $('view').innerHTML = `<div class="card"><h2>Report</h2>
-        <div class="row" style="margin-bottom:10px">
+      $('view').innerHTML = `<div class="card">
+        <h2>${ic('chart')} Report</h2>
+        <div class="row" style="margin-bottom:12px">
           <label class="field">From<input type="date" id="rf" value="${daysAgo(30)}"></label>
           <label class="field">To<input type="date" id="rt" value="${today()}"></label>
-          <button class="btn" id="rg" style="align-self:flex-end">Run</button></div>
+          <button class="btn primary" id="rg" style="align-self:flex-end">Run</button></div>
         <div id="rout" class="muted">Choose a range and run.</div></div>`;
       const run = async () => {
         const q = new URLSearchParams({ from: $('rf').value, to: $('rt').value });
         const rows = await api('/api/admin/report?' + q);
-        $('rout').innerHTML = rows.length ? `<table><tr><th>Name</th><th>Days</th><th>Actual</th><th>Expected</th><th>Diff</th><th>Approved h</th><th>Pay</th></tr>
+        $('rout').innerHTML = rows.length ? `<table><thead><tr><th>Name</th><th>Days</th><th>Actual</th><th>Exp.</th><th>Diff</th><th>Appr. h</th><th>Pay</th></tr></thead><tbody>
           ${rows.map((r) => {
             const diffCell = r.hasSchedule
               ? `<span class="${r.differenceMinutes < 0 ? 'err' : 'ok'}">${r.differenceMinutes > 0 ? '+' : ''}${hrs(r.differenceMinutes)}</span>`
               : '<span class="muted">—</span>';
             const expCell = r.hasSchedule ? hrs(r.expectedMinutes) : '<span class="muted">—</span>';
-            return `<tr><td>${esc(r.name || r.employeeRef)}</td><td>${r.days}</td><td>${hrs(r.totalMinutes)}</td><td>${expCell}</td><td>${diffCell}</td><td>${hrs(r.approvedMinutes)}</td><td>${r.approvedPay == null ? '—' : '$' + r.approvedPay.toFixed(2)}</td></tr>`;
-          }).join('')}</table>`
-          : '<span class="muted">No data in range.</span>';
+            return `<tr><td>${esc(r.name || r.employeeRef)}</td><td class="num">${r.days}</td><td class="num">${hrs(r.totalMinutes)}</td><td class="num">${expCell}</td><td class="num">${diffCell}</td><td class="num">${hrs(r.approvedMinutes)}</td><td class="num">${r.approvedPay == null ? '—' : '$' + r.approvedPay.toFixed(2)}</td></tr>`;
+          }).join('')}</tbody></table>` : empty('chart', 'No data in this range.');
       };
       $('rg').onclick = run; run();
     };
 
-    // ---------------- Manager: Zones ----------------
     VIEWS.zones = async () => {
       const zones = await api('/api/admin/zones');
       const hasMap = typeof window.L !== 'undefined';
-      $('view').innerHTML = `<div class="card"><h2>Work zones</h2>
-        <div id="zlist">${zones.length ? `<table><tr><th>Name</th><th>Radius</th><th>Location</th><th></th></tr>
-          ${zones.map((z) => `<tr><td>${esc(z.name)}</td><td>${Math.round(z.radiusM)} m</td><td class="muted">${z.lat.toFixed(4)}, ${z.lng.toFixed(4)}</td>
-          <td><button class="btn link" data-z="${esc(z.id)}">Remove</button></td></tr>`).join('')}</table>` : '<span class="muted">No zones yet.</span>'}</div></div>
-        <div class="card"><h2>Add zone</h2>
-          <div class="row"><input id="zn" placeholder="Zone name" style="flex:1">
+      $('view').innerHTML = `<div class="card"><h2>${ic('pin')} Work zones</h2>
+        <div id="zlist">${zones.length ? `<table><thead><tr><th>Name</th><th>Radius</th><th>Location</th><th></th></tr></thead><tbody>
+          ${zones.map((z) => `<tr><td style="font-weight:600">${esc(z.name)}</td><td class="num">${Math.round(z.radiusM)} m</td><td class="muted num">${z.lat.toFixed(4)}, ${z.lng.toFixed(4)}</td>
+          <td><button class="btn link" style="color:var(--danger)" data-z="${esc(z.id)}">Remove</button></td></tr>`).join('')}</tbody></table>` : empty('pin', 'No zones yet — add your first below.')}</div></div>
+        <div class="card"><h2>${ic('pin')} Add zone</h2>
+          <div class="row"><input id="zn" placeholder="Zone name" style="flex:1;min-width:160px">
             <button class="btn" id="zloc">Use my location</button></div>
-          ${hasMap ? '<div id="zmap"></div><div class="map-hint">Click the map to drop the zone, drag the dot to move it, drag the small white handle to resize.</div>' : ''}
-          <div class="row" style="margin-top:8px"><input id="zlat" placeholder="lat" style="width:110px"><input id="zlng" placeholder="lng" style="width:110px">
-            <input id="zr" type="number" value="100" min="10" step="10" style="width:90px"> m
+          ${hasMap ? '<div id="zmap" style="margin-top:10px"></div><div class="map-hint">Tap the map to drop the zone, drag the dot to move it, drag the small white handle to resize.</div>' : ''}
+          <div class="row" style="margin-top:6px"><input id="zlat" placeholder="lat" style="width:120px"><input id="zlng" placeholder="lng" style="width:120px">
+            <input id="zr" type="number" value="100" min="10" step="10" style="width:96px"> <span class="muted">m</span>
             <button class="btn primary" id="zadd">Add</button></div>
-          <div id="zloc-msg" class="muted" style="font-size:.75rem;margin-top:6px"></div></div>`;
+          <div id="zloc-msg" class="muted" style="font-size:.76rem;margin-top:8px"></div></div>`;
       $('zlist').querySelectorAll('button[data-z]').forEach((b) => b.onclick = async () => {
         try { await api('/api/admin/zones/' + encodeURIComponent(b.dataset.z), { method: 'DELETE' }); toast('Removed'); go('zones'); } catch (e) { toast(e.message, true); }
       });
 
-      // ---- interactive map picker (graceful fallback to coordinate entry) ----
       let pin = null, ring = null, handle = null;
       const radiusVal = () => Math.max(10, Number($('zr').value) || 100);
-      // A latLng `r` metres due-east of `c` — where the resize handle sits.
       const eastEdge = (c, r) => L.latLng(c.lat, c.lng + r / ((111320 * Math.cos(c.lat * Math.PI / 180)) || 1));
 
       if (hasMap) {
         const map = L.map('zmap');
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-          maxZoom: 19, attribution: '&copy; OpenStreetMap contributors',
-        }).addTo(map);
+        window.__zmap = map;
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
         const pts = [];
         zones.forEach((z) => {
-          L.circle([z.lat, z.lng], { radius: z.radiusM, color: '#8aa0a8', weight: 1, fillOpacity: .08 })
-            .addTo(map).bindTooltip(z.name);
+          L.circle([z.lat, z.lng], { radius: z.radiusM, color: '#8aa0a8', weight: 1, fillOpacity: .08 }).addTo(map).bindTooltip(z.name);
           pts.push([z.lat, z.lng]);
         });
-        if (pts.length) map.fitBounds(pts, { padding: [40, 40], maxZoom: 16 });
-        else map.setView([20, 0], 2);
-        setTimeout(() => map.invalidateSize(), 0); // container was just injected
+        if (pts.length) map.fitBounds(pts, { padding: [40, 40], maxZoom: 16 }); else map.setView([20, 0], 2);
+        setTimeout(() => map.invalidateSize(), 0);
 
         const pinIcon = L.divIcon({ className: '', html: '<div class="zpin"></div>', iconSize: [16, 16], iconAnchor: [8, 8] });
         const handleIcon = L.divIcon({ className: '', html: '<div class="zhandle"></div>', iconSize: [14, 14], iconAnchor: [7, 7] });
-        const syncInputs = () => {
-          const c = pin.getLatLng();
-          $('zlat').value = c.lat.toFixed(6);
-          $('zlng').value = c.lng.toFixed(6);
-        };
+        const syncInputs = () => { const c = pin.getLatLng(); $('zlat').value = c.lat.toFixed(6); $('zlng').value = c.lng.toFixed(6); };
         const place = (latlng, fly) => {
           const r = radiusVal();
           if (!pin) {
@@ -313,23 +560,16 @@
             ring = L.circle(latlng, { radius: r, color: '#2db4be', weight: 2, fillColor: '#2db4be', fillOpacity: .12 }).addTo(map);
             handle = L.marker(eastEdge(latlng, r), { draggable: true, icon: handleIcon }).addTo(map);
             pin.on('drag', () => { const c = pin.getLatLng(); ring.setLatLng(c); handle.setLatLng(eastEdge(c, ring.getRadius())); syncInputs(); });
-            handle.on('drag', () => {
-              const nr = Math.max(10, Math.round(pin.getLatLng().distanceTo(handle.getLatLng())));
-              ring.setRadius(nr); $('zr').value = nr; // handle lies on the ring by definition (r == distance)
-            });
-          } else {
-            pin.setLatLng(latlng); ring.setLatLng(latlng).setRadius(r); handle.setLatLng(eastEdge(latlng, r));
-          }
+            handle.on('drag', () => { const nr = Math.max(10, Math.round(pin.getLatLng().distanceTo(handle.getLatLng()))); ring.setRadius(nr); $('zr').value = nr; });
+          } else { pin.setLatLng(latlng); ring.setLatLng(latlng).setRadius(r); handle.setLatLng(eastEdge(latlng, r)); }
           syncInputs();
           if (fly) map.setView(latlng, Math.max(map.getZoom(), 16));
         };
         map.on('click', (e) => place(e.latlng));
-        // radius typed → resize ring + move handle to the east edge
         $('zr').oninput = () => { if (ring) { ring.setRadius(radiusVal()); handle.setLatLng(eastEdge(pin.getLatLng(), radiusVal())); } };
-        // coordinates typed → move/create the pin
         const fromInputs = () => { const la = Number($('zlat').value), ln = Number($('zlng').value); if ($('zlat').value && $('zlng').value && !isNaN(la) && !isNaN(ln)) place(L.latLng(la, ln), true); };
         $('zlat').onchange = fromInputs; $('zlng').onchange = fromInputs;
-        window.__zplace = place; // used by "Use my location"
+        window.__zplace = place;
       }
 
       $('zloc').onclick = () => {
@@ -350,51 +590,42 @@
       };
     };
 
-    // ---------------- Manager: Presence ----------------
     VIEWS.presence = async () => {
       const d = await api('/api/admin/presence');
       const rows = d.employees || [];
       const inNow = rows.filter((r) => r.checkedIn).length;
-      $('view').innerHTML = `<div class="card"><h2>Who’s in today</h2>
-        <div class="big">${inNow} <span class="muted" style="font-size:.9rem">in now</span></div>
-        ${rows.length ? `<table style="margin-top:10px"><tr><th>Employee</th><th>Status</th><th>Since</th></tr>
-        ${rows.map((r) => `<tr><td>${esc(r.employeeRef)}</td><td>${r.checkedIn ? '<span class="ok">In</span>' : 'Out'}</td><td>${timeOf(r.at)}</td></tr>`).join('')}</table>`
-        : '<p class="muted">No activity today.</p>'}</div>`;
+      $('view').innerHTML = `
+        <div class="hero ${inNow ? 'hero--on' : ''}">
+          <div class="hero__top">
+            <div class="hero__badge">${ic('activity')}</div>
+            <div><div class="hero__state">${inNow} on site</div><div class="hero__sub">${inNow ? 'currently checked in' : 'nobody checked in right now'}</div></div>
+          </div>
+        </div>
+        <div class="card"><h2>${ic('users')} Activity today</h2>
+        ${rows.length ? `<table><thead><tr><th>Employee</th><th>Status</th><th>Since</th></tr></thead><tbody>
+        ${rows.map((r) => `<tr><td>${esc(r.employeeRef)}</td><td>${r.checkedIn ? '<span class="pill complete">In</span>' : '<span class="pill">Out</span>'}</td><td class="num">${timeOf(r.at)}</td></tr>`).join('')}</tbody></table>`
+        : empty('activity', 'No check-ins yet today.')}</div>`;
     };
 
-    // ---------------- Manager: Settings ----------------
     VIEWS.settings = async () => {
       const s = await api('/api/admin/settings');
-      $('view').innerHTML = `<div class="card"><h2>Settings</h2>
-        <label class="field">Time zone (for day boundaries)
-          <input id="tz" value="${esc(s.timezone || 'UTC')}" placeholder="e.g. Asia/Kathmandu" style="max-width:260px"></label>
-        <div style="margin-top:10px"><button class="btn primary" id="tzsave">Save</button></div></div>`;
+      $('view').innerHTML = `<div class="card"><h2>${ic('sliders')} Settings</h2>
+        <label class="field" style="text-transform:none;letter-spacing:0;font-size:.8rem">Time zone (for day boundaries)
+          <input id="tz" value="${esc(s.timezone || 'UTC')}" placeholder="e.g. Asia/Kathmandu" style="max-width:280px;margin-top:4px"></label>
+        <div style="margin-top:14px"><button class="btn primary" id="tzsave">Save</button></div></div>`;
       $('tzsave').onclick = async () => {
         try { await api('/api/admin/settings', { method: 'PUT', body: { timezone: $('tz').value.trim() || 'UTC' } }); toast('Saved'); } catch (e) { toast(e.message, true); }
       };
     };
 
-    // ---------------- Staff: My attendance ----------------
-    VIEWS.me = async () => {
-      const [st, zones] = await Promise.all([api('/api/getMyStatus'), api('/api/getMyZones')]);
-      $('view').innerHTML = `<div class="card"><h2>Today</h2>
-        <div class="big">${st.checkedIn ? '<span class="ok">Checked in</span>' : 'Not checked in'}</div>
-        <p class="muted">${hrs(st.todayMinutes)} h worked today${st.since ? ' · since ' + timeOf(st.since) : ''}</p></div>
-        <div class="card"><h2>Your work zones</h2>${zones.length ? `<table><tr><th>Name</th><th>Radius</th></tr>${zones.map((z) => `<tr><td>${esc(z.name)}</td><td>${Math.round(z.radiusM)} m</td></tr>`).join('')}</table>` : '<span class="muted">No zones assigned.</span>'}</div>`;
-    };
-
-    // ---------------- Staff: History ----------------
-    VIEWS.history = async () => {
-      const rows = await api('/api/getMyHistory?days=30');
-      $('view').innerHTML = `<div class="card"><h2>Last 30 days</h2>${rows.length ? `<table><tr><th>Day</th><th>In</th><th>Out</th><th>Hours</th><th>Status</th></tr>
-        ${rows.map((r) => `<tr><td>${r.date}</td><td>${timeOf(r.firstIn)}</td><td>${timeOf(r.lastOut)}</td><td>${hrs(r.totalMinutes)}</td><td>${esc(r.status)}</td></tr>`).join('')}</table>`
-        : '<span class="muted">No records yet.</span>'}</div>`;
-    };
-
     // ---- Host ↔ plugin session bridge ----
     window.addEventListener('message', (ev) => {
       const msg = ev.data || {};
-      if (msg.type === 'eesa:session' && msg.token) { TOKEN = msg.token; boot(); }
+      if (msg.type === 'eesa:session' && msg.token) {
+        if (msg.theme) applyTheme(msg.theme);
+        TOKEN = msg.token;
+        boot();
+      }
     });
     if (window.parent && window.parent !== window) {
       window.parent.postMessage({ type: 'eesa:plugin-ready', plugin: 'attendance' }, '*');
