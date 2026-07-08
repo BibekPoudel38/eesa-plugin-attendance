@@ -10,6 +10,7 @@ import { dirname, join } from 'path';
 import { authMiddleware, verifyToken, requireGateway } from './auth.js';
 import * as db from './db.js';
 import { handleRpc } from './mcp.js';
+import { fetchRoster } from './roster.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANIFEST = JSON.parse(readFileSync(join(__dirname, '..', 'manifest.json'), 'utf-8'));
@@ -45,18 +46,65 @@ app.post('/mcp', async (req, res) => {
   }
 });
 
-// ---- REST hot path: called DIRECTLY by the Flutter app with the user's Eesa
-// token (NOT through the gateway, so no gateway-secret here). Latency-sensitive. ----
-const emp = authMiddleware({});
+// ---- Membership-based access (plugin-owned roles) -------------------------
+// Verify the Eesa token, resolve the caller's membership, gate by role. Roles
+// come from the plugin's OWN membership table, NOT token scopes. A platform
+// tenant-admin (token role=ADMIN, present on the UI-session token) is always a
+// manager so they can bootstrap enrollment before anyone is assigned.
+function isPlatformAdmin(ctx) {
+  return String(ctx.role || '').toUpperCase() === 'ADMIN';
+}
+function withMember({ manager = false } = {}) {
+  return async (req, res, next) => {
+    try {
+      req.ctx = await verifyToken(req.get('Authorization'));
+    } catch (e) {
+      return res.status(e.status || 401).json({ ok: false, error: e.message });
+    }
+    try {
+      const member = await db.getMembership(req.ctx.tenantId, req.ctx.sub);
+      const admin = isPlatformAdmin(req.ctx);
+      if (manager) {
+        if (!(admin || (member && member.role === 'manager'))) {
+          return res.status(403).json({ ok: false, error: { code: 'FORBIDDEN', message: 'Manager access required.' } });
+        }
+      } else if (!member) {
+        return res.status(403).json({ ok: false, error: { code: 'NOT_ENROLLED', message: 'You are not enrolled in attendance.' } });
+      }
+      req.member = member;
+      next();
+    } catch {
+      return res.status(500).json({ ok: false, error: 'membership lookup failed' });
+    }
+  };
+}
+const emp = withMember();
+const manager = withMember({ manager: true });
+
+// Who am I here? role=null → no access (the launcher hides the app).
+app.get('/api/me', async (req, res) => {
+  let ctx;
+  try { ctx = await verifyToken(req.get('Authorization')); }
+  catch (e) { return res.status(e.status || 401).json({ ok: false, error: e.message }); }
+  const member = await db.getMembership(ctx.tenantId, ctx.sub);
+  const admin = isPlatformAdmin(ctx);
+  res.json({ ok: true, data: {
+    role: (member && member.role) || (admin ? 'manager' : null),
+    enrolled: !!member,
+    isPlatformAdmin: admin,
+    member: member || null,
+  }});
+});
+
+// ---- Employee REST hot path (Flutter) — any enrolled user -----------------
 app.post('/api/checkIn', emp, async (req, res) => {
-  const { zoneId = null, lat = null, lng = null } = req.body || {};
-  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', { zoneId, lat, lng });
-  // Return the fresh status so the client updates in one round-trip.
+  const { zoneId = null, lat = null, lng = null, forWork = true, source = 'geofence' } = req.body || {};
+  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', { zoneId, lat, lng, forWork, source });
   res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) });
 });
 app.post('/api/checkOut', emp, async (req, res) => {
-  const { zoneId = null, lat = null, lng = null } = req.body || {};
-  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', { zoneId, lat, lng });
+  const { zoneId = null, lat = null, lng = null, source = 'geofence' } = req.body || {};
+  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', { zoneId, lat, lng, source });
   res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) });
 });
 app.get('/api/getMyStatus', emp, async (req, res) => res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) }));
@@ -64,24 +112,65 @@ app.get('/api/getMyZones', emp, async (req, res) => res.json({ ok: true, data: a
 app.get('/api/getMyHistory', emp, async (req, res) =>
   res.json({ ok: true, data: await db.myHistory(req.ctx.tenantId, req.ctx.sub, Number(req.query.days) || 7) }));
 
-// ---- Admin REST: requires the attendance:admin scope ----
-function requireAdmin(req, res, next) {
-  if (!(req.ctx.scopes || []).includes('attendance:admin')) {
-    return res.status(403).json({ ok: false, error: 'attendance:admin scope required' });
+// ---- Manager REST — team/roles, zones, presence, settings -----------------
+// Merge the tenant roster (from the main system) with plugin memberships so the
+// admin sees every user and their assigned role (or none).
+app.get('/api/admin/members', manager, async (req, res) => {
+  const tenantId = req.ctx.tenantId;
+  const [roster, members] = await Promise.all([
+    fetchRoster(tenantId).catch(() => []),
+    db.listMembers(tenantId),
+  ]);
+  const byId = new Map(members.map((m) => [m.employeeRef, m]));
+  const rows = roster.map((u) => {
+    const m = byId.get(String(u.id));
+    return {
+      employeeRef: String(u.id),
+      name: u.name || (m && m.name) || '',
+      email: u.email || (m && m.email) || '',
+      role: (m && m.role) || null,
+      payRate: (m && m.payRate) ?? null,
+    };
+  });
+  for (const m of members) {
+    if (!roster.some((u) => String(u.id) === m.employeeRef)) {
+      rows.push({ employeeRef: m.employeeRef, name: m.name, email: m.email, role: m.role, payRate: m.payRate });
+    }
   }
-  next();
-}
-const admin = [authMiddleware({}), requireAdmin];
-app.get('/api/admin/zones', admin, async (req, res) => res.json({ ok: true, data: await db.listZones(req.ctx.tenantId) }));
-app.post('/api/admin/zones', admin, async (req, res) => res.json({ ok: true, data: await db.createZone(req.ctx.tenantId, req.body || {}) }));
-app.delete('/api/admin/zones/:id', admin, async (req, res) =>
-  res.json({ ok: true, data: await db.deleteZone(req.ctx.tenantId, req.params.id) }));
-app.get('/api/admin/presence', admin, async (req, res) => res.json({ ok: true, data: await db.presence(req.ctx.tenantId) }));
+  res.json({ ok: true, data: rows });
+});
+app.post('/api/admin/members', manager, async (req, res) => {
+  const { employeeRef, role = 'staff', payRate = null, name = '', email = '' } = req.body || {};
+  if (!employeeRef) return res.status(400).json({ ok: false, error: 'employeeRef required' });
+  res.json({ ok: true, data: await db.upsertMember(req.ctx.tenantId, { employeeRef, role, payRate, name, email }) });
+});
+app.delete('/api/admin/members/:id', manager, async (req, res) =>
+  res.json({ ok: true, data: await db.removeMember(req.ctx.tenantId, req.params.id) }));
 
-// ---- Embedded UI: static shell + a context endpoint verified with the UI session token ----
+app.get('/api/admin/settings', manager, async (req, res) =>
+  res.json({ ok: true, data: { timezone: await db.getTenantTimezone(req.ctx.tenantId) } }));
+app.put('/api/admin/settings', manager, async (req, res) =>
+  res.json({ ok: true, data: await db.setTenantTimezone(req.ctx.tenantId, (req.body || {}).timezone || 'UTC') }));
+
+app.get('/api/admin/zones', manager, async (req, res) => res.json({ ok: true, data: await db.listZones(req.ctx.tenantId) }));
+app.post('/api/admin/zones', manager, async (req, res) => res.json({ ok: true, data: await db.createZone(req.ctx.tenantId, req.body || {}) }));
+app.delete('/api/admin/zones/:id', manager, async (req, res) =>
+  res.json({ ok: true, data: await db.deleteZone(req.ctx.tenantId, req.params.id) }));
+app.get('/api/admin/presence', manager, async (req, res) => res.json({ ok: true, data: await db.presence(req.ctx.tenantId) }));
+
+// ---- Embedded UI: static shell + a context endpoint (UI session token) ----
 app.get('/app', (req, res) => res.sendFile(join(__dirname, '..', 'public', 'app.html')));
-app.get('/api/ui/context', authMiddleware({ surface: 'ui' }), (req, res) =>
-  res.json({ ok: true, tenant: req.ctx.tenantId, name: req.ctx.email || req.ctx.sub, role: req.ctx.role, scopes: req.ctx.scopes }));
+app.get('/api/ui/context', authMiddleware({ surface: 'ui' }), async (req, res) => {
+  const member = await db.getMembership(req.ctx.tenantId, req.ctx.sub);
+  const admin = isPlatformAdmin(req.ctx);
+  res.json({
+    ok: true,
+    tenant: req.ctx.tenantId,
+    name: req.ctx.email || req.ctx.sub,
+    role: (member && member.role) || (admin ? 'manager' : null),
+    isPlatformAdmin: admin,
+  });
+});
 
 const port = process.env.PORT || 8080;
 app.listen(port, () => console.log(`attendance plugin listening on :${port}`));

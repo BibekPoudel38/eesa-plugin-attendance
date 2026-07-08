@@ -64,11 +64,14 @@ export async function deleteZone(tenantId, zoneId) {
 }
 
 // ---- events / check-in-out ------------------------------------------------
-export async function recordEvent(tenantId, employeeRef, type, { zoneId = null, lat = null, lng = null } = {}) {
+export async function recordEvent(
+  tenantId, employeeRef, type,
+  { zoneId = null, lat = null, lng = null, forWork = true, source = 'geofence' } = {},
+) {
   const rows = await q(
-    `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng)
-     values ($1, $2, $3, $4, $5, $6) returning id, type, at`,
-    [tenantId, employeeRef, type, zoneId, lat, lng],
+    `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, for_work, source)
+     values ($1, $2, $3, $4, $5, $6, $7, $8) returning id, type, at`,
+    [tenantId, employeeRef, type, zoneId, lat, lng, forWork !== false, String(source || 'geofence')],
   );
   await upsertDaySummary(tenantId, employeeRef);
   return { id: String(rows[0].id), type: rows[0].type, at: iso(rows[0].at) };
@@ -77,7 +80,7 @@ export async function recordEvent(tenantId, employeeRef, type, { zoneId = null, 
 // Today's raw events, ascending — the basis for status + the day summary.
 async function todaysEvents(tenantId, employeeRef) {
   return q(
-    `select type, zone_id, at from events
+    `select type, zone_id, at, for_work from events
       where tenant_id = $1 and employee_ref = $2 and at >= date_trunc('day', now())
       order by at asc`,
     [tenantId, employeeRef],
@@ -95,6 +98,9 @@ function computeToday(events) {
   for (const e of events) {
     const at = new Date(e.at);
     if (e.type === 'check_in') {
+      // "Here but not for work" (the geofence prompt's No) is logged but never
+      // opens a paid interval.
+      if (e.for_work === false) continue;
       firstIn ??= at;
       openIn = at;
       lastZone = e.zone_id;
