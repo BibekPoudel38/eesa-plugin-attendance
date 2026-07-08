@@ -11,7 +11,7 @@
   "scopes": ["attendance:read", "attendance:write", "attendance:admin"],
   "surfaces": {
     "mcp": {
-      "endpoint": "https://attendance.plugins.eesa.ai/mcp",
+      "endpoint": "https://attendance.plugins.bibekpoudel.com/mcp",
       "transport": "streamable-http",
       "tools": [
         {"name": "mark_attendance", "description": "Mark the current user present or absent"},
@@ -19,8 +19,8 @@
         {"name": "get_my_status", "description": "Get the current user's attendance status today"}
       ]
     },
-    "ui": {"url": "https://attendance.plugins.eesa.ai/app", "embeddable": true},
-    "rest": {"endpoint": "https://attendance.plugins.eesa.ai/api", "hotPath": true}
+    "ui": {"url": "https://attendance.plugins.bibekpoudel.com/app", "embeddable": true},
+    "rest": {"endpoint": "https://attendance.plugins.bibekpoudel.com/api", "hotPath": true}
   },
   "entitlementKey": "attendance",
   "roles": [
