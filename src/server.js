@@ -10,7 +10,7 @@ import { dirname, join } from 'path';
 import { authMiddleware, verifyToken, requireGateway } from './auth.js';
 import * as db from './db.js';
 import { handleRpc } from './mcp.js';
-import { fetchRoster } from './roster.js';
+import { fetchRoster, rosterHealth } from './roster.js';
 import { notifyUser } from './notify.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -138,7 +138,11 @@ app.get('/api/admin/members', manager, async (req, res) => {
       rows.push({ employeeRef: m.employeeRef, name: m.name, email: m.email, role: m.role, payRate: m.payRate });
     }
   }
-  res.json({ ok: true, data: rows });
+  const out = { ok: true, data: rows };
+  // Nothing to show → attach a self-diagnosis (why the roster came back empty)
+  // so the admin sees the actual reason instead of a blank table.
+  if (rows.length === 0) out.diag = await rosterHealth(tenantId);
+  res.json(out);
 });
 app.post('/api/admin/members', manager, async (req, res) => {
   const { employeeRef, role = 'staff', payRate = null, name = '', email = '' } = req.body || {};

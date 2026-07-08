@@ -64,14 +64,15 @@
       t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
     }
 
-    async function api(path, { method = 'GET', body = null } = {}) {
+    async function apiFull(path, { method = 'GET', body = null } = {}) {
       const opts = { method, headers: { Authorization: 'Bearer ' + TOKEN } };
       if (body != null) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
       const r = await fetch(path, opts);
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.ok === false) throw new Error((j.error && (j.error.message || j.error)) || ('HTTP ' + r.status));
-      return j.data;
+      return j; // whole envelope: { ok, data, diag? }
     }
+    async function api(path, opts) { return (await apiFull(path, opts)).data; }
 
     const MANAGER_TABS = [
       ['team', 'Team'], ['schedule', 'Schedule'], ['approvals', 'Approvals'], ['report', 'Report'],
@@ -107,8 +108,18 @@
     // ---------------- Manager: Team / roles ----------------
     const VIEWS = {};
     VIEWS.team = async () => {
-      const rows = await api('/api/admin/members');
-      $('view').innerHTML = `<div class="card"><h2>Team &amp; roles</h2>
+      const resp = await apiFull('/api/admin/members');
+      const rows = resp.data || [];
+      const d = resp.diag;
+      const banner = (rows.length === 0 && d && d.error)
+        ? `<div class="card" style="border-color:var(--danger)">
+            <strong>Couldn’t load your workspace roster</strong>
+            <div style="margin-top:.4rem">${esc(d.error)}</div>
+            <div class="muted" style="font-size:.72rem;margin-top:.4rem">
+              backend: ${esc(d.apiBase)} · secret set: ${d.hasSecret} · workspace: ${esc(d.tenantId || '—')} · status: ${d.status == null ? '—' : d.status}
+            </div></div>`
+        : '';
+      $('view').innerHTML = banner + `<div class="card"><h2>Team &amp; roles</h2>
         <p class="muted" style="margin-top:0">Assign a role to everyone who needs attendance. No role = no access. Set an hourly pay rate for the report + QuickBooks.</p>
         <table><tr><th>Name</th><th>Role</th><th>Pay/hr</th><th></th></tr>
         ${rows.map((u, i) => `<tr>
