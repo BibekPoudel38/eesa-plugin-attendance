@@ -22,5 +22,9 @@
     "ui": {"url": "https://attendance.plugins.eesa.ai/app", "embeddable": true},
     "rest": {"endpoint": "https://attendance.plugins.eesa.ai/api", "hotPath": true}
   },
-  "entitlementKey": "attendance"
+  "entitlementKey": "attendance",
+  "roles": [
+    {"key": "manager", "label": "Attendance Manager", "description": "Manage zones, approve attendance, run reports, and make manual entries."},
+    {"key": "staff", "label": "Staff", "description": "Log own check-in/out and view own attendance."}
+  ]
 }
