@@ -120,9 +120,13 @@ function computeToday(events) {
   for (const e of events) {
     const at = new Date(e.at);
     if (e.type === 'check_in') {
-      // "Here but not for work" (the geofence prompt's No) is logged but never
-      // opens a paid interval.
-      if (e.for_work === false) continue;
+      // "Here but not for work" (the geofence prompt's No / banner toggle) stops
+      // counting work time from this point — it closes any open interval and does
+      // NOT reopen one.
+      if (e.for_work === false) {
+        if (openIn) { ms += at - openIn; openIn = null; }
+        continue;
+      }
       firstIn ??= at;
       openIn = at;
       lastZone = e.zone_id;
