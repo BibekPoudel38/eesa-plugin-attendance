@@ -214,12 +214,16 @@ app.get('/app', (req, res) => res.sendFile(join(__dirname, '..', 'public', 'app.
 app.get('/api/ui/context', authMiddleware({ surface: 'ui' }), async (req, res) => {
   const member = await db.getMembership(req.ctx.tenantId, req.ctx.sub);
   const admin = isPlatformAdmin(req.ctx);
+  // Wrap in `data` — the UI's api() helper returns j.data, like every other
+  // endpoint. Top-level fields here made CTX undefined → "reading 'name'".
   res.json({
     ok: true,
-    tenant: req.ctx.tenantId,
-    name: req.ctx.email || req.ctx.sub,
-    role: (member && member.role) || (admin ? 'manager' : null),
-    isPlatformAdmin: admin,
+    data: {
+      tenant: req.ctx.tenantId,
+      name: req.ctx.email || req.ctx.sub,
+      role: (member && member.role) || (admin ? 'manager' : null),
+      isPlatformAdmin: admin,
+    },
   });
 });
 
