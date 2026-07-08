@@ -50,11 +50,14 @@ app.post('/mcp', async (req, res) => {
 const emp = authMiddleware({});
 app.post('/api/checkIn', emp, async (req, res) => {
   const { zoneId = null, lat = null, lng = null } = req.body || {};
-  res.json({ ok: true, event: await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', { zoneId, lat, lng }) });
+  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', { zoneId, lat, lng });
+  // Return the fresh status so the client updates in one round-trip.
+  res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) });
 });
 app.post('/api/checkOut', emp, async (req, res) => {
   const { zoneId = null, lat = null, lng = null } = req.body || {};
-  res.json({ ok: true, event: await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', { zoneId, lat, lng }) });
+  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', { zoneId, lat, lng });
+  res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) });
 });
 app.get('/api/getMyStatus', emp, async (req, res) => res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) }));
 app.get('/api/getMyZones', emp, async (req, res) => res.json({ ok: true, data: await db.listZones(req.ctx.tenantId) }));
@@ -71,6 +74,8 @@ function requireAdmin(req, res, next) {
 const admin = [authMiddleware({}), requireAdmin];
 app.get('/api/admin/zones', admin, async (req, res) => res.json({ ok: true, data: await db.listZones(req.ctx.tenantId) }));
 app.post('/api/admin/zones', admin, async (req, res) => res.json({ ok: true, data: await db.createZone(req.ctx.tenantId, req.body || {}) }));
+app.delete('/api/admin/zones/:id', admin, async (req, res) =>
+  res.json({ ok: true, data: await db.deleteZone(req.ctx.tenantId, req.params.id) }));
 app.get('/api/admin/presence', admin, async (req, res) => res.json({ ok: true, data: await db.presence(req.ctx.tenantId) }));
 
 // ---- Embedded UI: static shell + a context endpoint verified with the UI session token ----
