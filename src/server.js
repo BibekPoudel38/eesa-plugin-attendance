@@ -11,6 +11,7 @@ import { authMiddleware, verifyToken, requireGateway } from './auth.js';
 import * as db from './db.js';
 import { handleRpc } from './mcp.js';
 import { fetchRoster } from './roster.js';
+import { notifyUser } from './notify.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANIFEST = JSON.parse(readFileSync(join(__dirname, '..', 'manifest.json'), 'utf-8'));
@@ -166,7 +167,21 @@ app.get('/api/admin/approvals', manager, async (req, res) =>
 app.post('/api/admin/approvals', manager, async (req, res) => {
   const { employeeRef, day, status = 'approved' } = req.body || {};
   if (!employeeRef || !day) return res.status(400).json({ ok: false, error: 'employeeRef and day required' });
-  res.json({ ok: true, data: await db.setApproval(req.ctx.tenantId, employeeRef, day, status, req.ctx.sub) });
+  const result = await db.setApproval(req.ctx.tenantId, employeeRef, day, status, req.ctx.sub);
+  // Nothing to approve if no timesheet exists for that day (e.g. a scheduled but
+  // unworked absence). Don't claim success / notify.
+  if (!result.updated) {
+    return res.status(404).json({ ok: false, error: { code: 'NO_TIMESHEET', message: 'No attendance recorded for that day.' } });
+  }
+  // Notify the staff member of the decision (best-effort, non-blocking).
+  const verb = status === 'rejected' ? 'rejected' : status === 'pending' ? 'reset to pending' : 'approved';
+  notifyUser(req.ctx.tenantId, employeeRef, {
+    title: `Timesheet ${verb}`,
+    body: `Your attendance for ${day} was ${verb}.`,
+    type: 'attendance_approved',
+    data: { day: String(day), status: String(status) },
+  });
+  res.json({ ok: true, data: result });
 });
 
 // Manual entry: log an event on a staff member's behalf (fallback / correction).
@@ -179,6 +194,20 @@ app.post('/api/admin/manual-entry', manager, async (req, res) => {
 // EOD report — per-employee hours + approved pay (the QuickBooks export basis).
 app.get('/api/admin/report', manager, async (req, res) =>
   res.json({ ok: true, data: await db.report(req.ctx.tenantId, { from: req.query.from || null, to: req.query.to || null }) }));
+
+// Optional per-person, per-day schedule (expected hours) → Actual vs Expected.
+app.get('/api/admin/schedules', manager, async (req, res) =>
+  res.json({ ok: true, data: await db.listSchedules(req.ctx.tenantId, {
+    from: req.query.from || null, to: req.query.to || null, employeeRef: req.query.employeeRef || null,
+  }) }));
+app.post('/api/admin/schedules', manager, async (req, res) => {
+  const { employeeRef, day, expectedMinutes = null, expectedHours = null, note = '' } = req.body || {};
+  if (!employeeRef || !day) return res.status(400).json({ ok: false, error: 'employeeRef and day required' });
+  const mins = expectedMinutes != null ? Number(expectedMinutes) : Math.round(Number(expectedHours || 0) * 60);
+  res.json({ ok: true, data: await db.upsertSchedule(req.ctx.tenantId, { employeeRef, day, expectedMinutes: mins, note }) });
+});
+app.delete('/api/admin/schedules/:employeeRef/:day', manager, async (req, res) =>
+  res.json({ ok: true, data: await db.removeSchedule(req.ctx.tenantId, req.params.employeeRef, req.params.day) }));
 
 // ---- Embedded UI: static shell + a context endpoint (UI session token) ----
 app.get('/app', (req, res) => res.sendFile(join(__dirname, '..', 'public', 'app.html')));

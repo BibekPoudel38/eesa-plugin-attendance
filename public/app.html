@@ -74,7 +74,7 @@
     }
 
     const MANAGER_TABS = [
-      ['team', 'Team'], ['approvals', 'Approvals'], ['report', 'Report'],
+      ['team', 'Team'], ['schedule', 'Schedule'], ['approvals', 'Approvals'], ['report', 'Report'],
       ['zones', 'Zones'], ['presence', 'Who’s in'], ['settings', 'Settings'],
     ];
     const STAFF_TABS = [['me', 'My attendance'], ['history', 'History']];
@@ -133,6 +133,44 @@
       });
     };
 
+    // ---------------- Manager: Schedule (optional expected hours) ----------------
+    VIEWS.schedule = async () => {
+      const members = (await api('/api/admin/members')).filter((m) => m.role);
+      $('view').innerHTML = `<div class="card"><h2>Set a schedule</h2>
+        <p class="muted" style="margin-top:0">Optional. Set expected hours for a person on a day; the report then compares actual vs expected.</p>
+        <div class="row">
+          <label class="field">Person<select id="sref">${members.map((m) => `<option value="${esc(m.employeeRef)}">${esc(m.name || m.employeeRef)}</option>`).join('') || '<option value="">No enrolled staff</option>'}</select></label>
+          <label class="field">Day<input type="date" id="sday" value="${today()}"></label>
+          <label class="field">Expected hours<input id="shrs" type="number" min="0" step="0.5" value="8" style="width:90px"></label>
+          <button class="btn primary" id="ssave" style="align-self:flex-end">Save</button>
+        </div></div>
+        <div class="card"><h2>Schedules</h2>
+          <div class="row" style="margin-bottom:10px">
+            <label class="field">From<input type="date" id="sf" value="${daysAgo(7)}"></label>
+            <label class="field">To<input type="date" id="st" value="${daysAgo(-14)}"></label>
+            <button class="btn" id="sg" style="align-self:flex-end">Apply</button></div>
+          <div id="slist" class="muted">Loading…</div></div>`;
+      const load = async () => {
+        const q = new URLSearchParams({ from: $('sf').value, to: $('st').value });
+        const rows = await api('/api/admin/schedules?' + q);
+        $('slist').innerHTML = rows.length ? `<table><tr><th>Name</th><th>Day</th><th>Expected</th><th></th></tr>
+          ${rows.map((r) => `<tr><td>${esc(r.name || r.employeeRef)}</td><td>${r.day}</td><td>${hrs(r.expectedMinutes)} h</td>
+          <td><button class="btn link" data-e="${esc(r.employeeRef)}" data-d="${r.day}">Remove</button></td></tr>`).join('')}</table>`
+          : '<span class="muted">No schedules in range.</span>';
+        $('slist').querySelectorAll('button[data-e]').forEach((b) => b.onclick = async () => {
+          try { await api('/api/admin/schedules/' + encodeURIComponent(b.dataset.e) + '/' + b.dataset.d, { method: 'DELETE' }); toast('Removed'); load(); }
+          catch (e) { toast(e.message, true); }
+        });
+      };
+      $('sg').onclick = load;
+      $('ssave').onclick = async () => {
+        if (!$('sref').value) return toast('No staff to schedule', true);
+        try { await api('/api/admin/schedules', { method: 'POST', body: { employeeRef: $('sref').value, day: $('sday').value, expectedHours: Number($('shrs').value) || 0 } }); toast('Saved'); load(); }
+        catch (e) { toast(e.message, true); }
+      };
+      load();
+    };
+
     // ---------------- Manager: Approvals + manual entry ----------------
     VIEWS.approvals = async () => {
       $('view').innerHTML = `<div class="card"><h2>Approvals</h2>
@@ -152,9 +190,10 @@
       const load = async () => {
         const q = new URLSearchParams({ from: $('af').value, to: $('at').value, ...($('as').value ? { status: $('as').value } : {}) });
         const rows = await api('/api/admin/approvals?' + q);
-        $('alist').innerHTML = rows.length ? `<table><tr><th>Name</th><th>Day</th><th>In</th><th>Out</th><th>Hours</th><th>Status</th><th></th></tr>
+        $('alist').innerHTML = rows.length ? `<table><tr><th>Name</th><th>Day</th><th>In</th><th>Out</th><th>Actual</th><th>Expected</th><th>Status</th><th></th></tr>
           ${rows.map((r) => `<tr>
             <td>${esc(r.name || r.employeeRef)}</td><td>${r.day}</td><td>${timeOf(r.firstIn)}</td><td>${timeOf(r.lastOut)}</td><td>${hrs(r.totalMinutes)}</td>
+            <td>${r.expectedMinutes == null ? '<span class="muted">—</span>' : hrs(r.expectedMinutes)}</td>
             <td><span class="pill ${r.approvalStatus}">${r.approvalStatus}</span></td>
             <td><button class="btn link" data-a="approved" data-e="${esc(r.employeeRef)}" data-d="${r.day}">Approve</button>
                 <button class="btn link" data-a="rejected" data-e="${esc(r.employeeRef)}" data-d="${r.day}">Reject</button></td>
@@ -186,8 +225,14 @@
       const run = async () => {
         const q = new URLSearchParams({ from: $('rf').value, to: $('rt').value });
         const rows = await api('/api/admin/report?' + q);
-        $('rout').innerHTML = rows.length ? `<table><tr><th>Name</th><th>Days</th><th>Hours</th><th>Approved h</th><th>Pay</th></tr>
-          ${rows.map((r) => `<tr><td>${esc(r.name || r.employeeRef)}</td><td>${r.days}</td><td>${hrs(r.totalMinutes)}</td><td>${hrs(r.approvedMinutes)}</td><td>${r.approvedPay == null ? '—' : '$' + r.approvedPay.toFixed(2)}</td></tr>`).join('')}</table>`
+        $('rout').innerHTML = rows.length ? `<table><tr><th>Name</th><th>Days</th><th>Actual</th><th>Expected</th><th>Diff</th><th>Approved h</th><th>Pay</th></tr>
+          ${rows.map((r) => {
+            const diffCell = r.hasSchedule
+              ? `<span class="${r.differenceMinutes < 0 ? 'err' : 'ok'}">${r.differenceMinutes > 0 ? '+' : ''}${hrs(r.differenceMinutes)}</span>`
+              : '<span class="muted">—</span>';
+            const expCell = r.hasSchedule ? hrs(r.expectedMinutes) : '<span class="muted">—</span>';
+            return `<tr><td>${esc(r.name || r.employeeRef)}</td><td>${r.days}</td><td>${hrs(r.totalMinutes)}</td><td>${expCell}</td><td>${diffCell}</td><td>${hrs(r.approvedMinutes)}</td><td>${r.approvedPay == null ? '—' : '$' + r.approvedPay.toFixed(2)}</td></tr>`;
+          }).join('')}</table>`
           : '<span class="muted">No data in range.</span>';
       };
       $('rg').onclick = run; run();

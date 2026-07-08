@@ -8,6 +8,12 @@ import pg from 'pg';
 
 const { Pool } = pg;
 
+// Return `date` columns (OID 1082) as raw 'YYYY-MM-DD' strings, NOT JS Date
+// objects. pg's default parses a bare date as LOCAL midnight, and toISOString()
+// would then shift it by a day under a non-UTC process timezone — silently
+// breaking day-keyed round-trips (approve/reject + schedule remove by day).
+pg.types.setTypeParser(1082, (v) => v);
+
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   // Managed Postgres (Supabase/Neon/RDS) needs SSL; set PGSSL=disable for a
@@ -20,9 +26,22 @@ async function q(text, params) {
   return r.rows;
 }
 
+// Tenant timezone (for LOCAL-day boundaries), cached; invalidated on change.
+const _tzCache = new Map();
+async function tenantTz(tenantId) {
+  if (_tzCache.has(tenantId)) return _tzCache.get(tenantId);
+  const rows = await q(`select timezone from tenant_settings where tenant_id = $1`, [tenantId]);
+  const tz = (rows[0] && rows[0].timezone) || 'UTC';
+  _tzCache.set(tenantId, tz);
+  return tz;
+}
+
 // ---- normalizers ----------------------------------------------------------
 const iso = (v) => (v == null ? null : (v instanceof Date ? v : new Date(v)).toISOString());
-const dayStr = (d) => (d instanceof Date ? d : new Date(d)).toISOString().slice(0, 10);
+const dayStr = (d) =>
+  typeof d === 'string'
+    ? d.slice(0, 10)
+    : (d instanceof Date ? d : new Date(d)).toISOString().slice(0, 10);
 const zoneOut = (r) => ({
   id: String(r.id),
   name: r.name,
@@ -78,12 +97,15 @@ export async function recordEvent(
 }
 
 // Today's raw events, ascending — the basis for status + the day summary.
+// "Today" is the tenant's LOCAL day (not the DB/UTC day).
 async function todaysEvents(tenantId, employeeRef) {
+  const tz = await tenantTz(tenantId);
   return q(
     `select type, zone_id, at, for_work from events
-      where tenant_id = $1 and employee_ref = $2 and at >= date_trunc('day', now())
+      where tenant_id = $1 and employee_ref = $2
+        and at >= (date_trunc('day', now() at time zone $3) at time zone $3)
       order by at asc`,
-    [tenantId, employeeRef],
+    [tenantId, employeeRef, tz],
   );
 }
 
@@ -125,11 +147,12 @@ function computeToday(events) {
 }
 
 export async function myStatus(tenantId, employeeRef) {
+  const tz = await tenantTz(tenantId);
   const events = await todaysEvents(tenantId, employeeRef);
   const t = computeToday(events);
   const today = events.length
     ? {
-        date: dayStr(new Date()),
+        date: new Date().toLocaleDateString('en-CA', { timeZone: tz }),
         totalMinutes: t.totalMinutes,
         firstIn: iso(t.firstIn),
         lastOut: iso(t.lastOut),
@@ -163,23 +186,26 @@ export async function myHistory(tenantId, employeeRef, days = 7) {
 }
 
 export async function whoIsLate(tenantId, cutoffHour = 9) {
+  const tz = await tenantTz(tenantId);
   const rows = await q(
     `select employee_ref, min(at) as first_in from events
-      where tenant_id = $1 and type = 'check_in' and at >= date_trunc('day', now())
+      where tenant_id = $1 and type = 'check_in'
+        and at >= (date_trunc('day', now() at time zone $3) at time zone $3)
       group by employee_ref
-      having extract(hour from min(at)) >= $2
+      having extract(hour from min(at) at time zone $3) >= $2
       order by first_in`,
-    [tenantId, cutoffHour],
+    [tenantId, cutoffHour, tz],
   );
   return rows.map((r) => ({ employeeRef: r.employee_ref, firstIn: iso(r.first_in) }));
 }
 
 export async function presence(tenantId) {
+  const tz = await tenantTz(tenantId);
   const rows = await q(
     `select distinct on (employee_ref) employee_ref, type, at from events
-      where tenant_id = $1 and at >= date_trunc('day', now())
+      where tenant_id = $1 and at >= (date_trunc('day', now() at time zone $2) at time zone $2)
       order by employee_ref, at desc`,
-    [tenantId],
+    [tenantId, tz],
   );
   return {
     employees: rows.map((r) => ({
@@ -192,14 +218,15 @@ export async function presence(tenantId) {
 
 // Recompute today's summary (first_in, last_out, total_minutes) from events.
 async function upsertDaySummary(tenantId, employeeRef) {
+  const tz = await tenantTz(tenantId);
   const t = computeToday(await todaysEvents(tenantId, employeeRef));
   await q(
     `insert into day_summaries (tenant_id, employee_ref, day, first_in, last_out, total_minutes, updated_at)
-     values ($1, $2, current_date, $3, $4, $5, now())
+     values ($1, $2, (now() at time zone $6)::date, $3, $4, $5, now())
      on conflict (tenant_id, employee_ref, day)
      do update set first_in = excluded.first_in, last_out = excluded.last_out,
                    total_minutes = excluded.total_minutes, updated_at = now()`,
-    [tenantId, employeeRef, t.firstIn, t.lastOut, t.totalMinutes],
+    [tenantId, employeeRef, t.firstIn, t.lastOut, t.totalMinutes, tz],
   );
 }
 
@@ -262,12 +289,16 @@ export async function getTenantTimezone(tenantId) {
 }
 
 export async function setTenantTimezone(tenantId, timezone) {
+  let tz = String(timezone || 'UTC').slice(0, 64);
+  // Reject a bad IANA zone before it can break the `at time zone` day math.
+  try { new Intl.DateTimeFormat('en-CA', { timeZone: tz }); } catch { tz = 'UTC'; }
   await q(
     `insert into tenant_settings (tenant_id, timezone, updated_at) values ($1, $2, now())
      on conflict (tenant_id) do update set timezone = excluded.timezone, updated_at = now()`,
-    [tenantId, String(timezone || 'UTC').slice(0, 64)],
+    [tenantId, tz],
   );
-  return { timezone };
+  _tzCache.set(tenantId, tz);
+  return { timezone: tz };
 }
 
 // ---- approvals + reporting (manager) --------------------------------------
@@ -282,9 +313,10 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
   const rows = await q(
     `select ds.employee_ref, ds.day, ds.first_in, ds.last_out, ds.total_minutes,
             ds.approval_status, ds.approved_by, ds.approved_at,
-            coalesce(m.name, '') as name, m.pay_rate
+            coalesce(m.name, '') as name, m.pay_rate, sc.expected_minutes
        from day_summaries ds
        left join memberships m on m.tenant_id = ds.tenant_id and m.employee_ref = ds.employee_ref
+       left join schedules  sc on sc.tenant_id = ds.tenant_id and sc.employee_ref = ds.employee_ref and sc.day = ds.day
       where ${clauses.join(' and ')}
       order by ds.day desc, name`,
     params,
@@ -296,6 +328,7 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
     firstIn: iso(r.first_in),
     lastOut: iso(r.last_out),
     totalMinutes: Number(r.total_minutes || 0),
+    expectedMinutes: r.expected_minutes == null ? null : Number(r.expected_minutes),
     approvalStatus: r.approval_status || 'pending',
     approvedBy: r.approved_by || null,
     approvedAt: iso(r.approved_at),
@@ -305,16 +338,17 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
 
 export async function setApproval(tenantId, employeeRef, day, status, approvedBy) {
   const st = ['approved', 'rejected', 'pending'].includes(status) ? status : 'pending';
-  await q(
+  const rows = await q(
     `update day_summaries
         set approval_status = $4,
             approved_by = case when $4 = 'pending' then null else $5 end,
             approved_at = case when $4 = 'pending' then null else now() end,
             updated_at = now()
-      where tenant_id = $1 and employee_ref = $2 and day = $3`,
+      where tenant_id = $1 and employee_ref = $2 and day = $3
+      returning employee_ref`,
     [tenantId, employeeRef, day, st, approvedBy],
   );
-  return { employeeRef: String(employeeRef), day: String(day), approvalStatus: st };
+  return { employeeRef: String(employeeRef), day: String(day), approvalStatus: st, updated: rows.length > 0 };
 }
 
 // Admin logs an event on a staff member's behalf (fallback / correction).
@@ -332,34 +366,90 @@ export async function manualEntry(tenantId, employeeRef, type, at = null) {
 }
 
 // Per-employee totals for a period — the EOD report + the QBO export basis.
+// Unions worked days (day_summaries) with scheduled days (schedules) so the
+// report shows Actual vs Expected vs Difference even when a scheduled day was
+// NOT worked (absence) or a worked day was NOT scheduled.
 export async function report(tenantId, { from = null, to = null } = {}) {
-  const params = [tenantId];
-  const clauses = ['ds.tenant_id = $1'];
-  if (from) { params.push(from); clauses.push(`ds.day >= $${params.length}`); }
-  if (to) { params.push(to); clauses.push(`ds.day <= $${params.length}`); }
+  const f = from || '1970-01-01';
+  const t = to || '2999-12-31';
   const rows = await q(
-    `select ds.employee_ref, coalesce(m.name, '') as name, m.pay_rate,
-            sum(ds.total_minutes) as total_minutes,
+    `with keys as (
+       select employee_ref, day from day_summaries where tenant_id = $1 and day between $2 and $3
+       union
+       select employee_ref, day from schedules     where tenant_id = $1 and day between $2 and $3
+     )
+     select k.employee_ref, coalesce(m.name, '') as name, m.pay_rate,
+            sum(coalesce(ds.total_minutes, 0)) as total_minutes,
             sum(case when ds.approval_status = 'approved' then ds.total_minutes else 0 end) as approved_minutes,
-            count(*) as days
-       from day_summaries ds
-       left join memberships m on m.tenant_id = ds.tenant_id and m.employee_ref = ds.employee_ref
-      where ${clauses.join(' and ')}
-      group by ds.employee_ref, m.name, m.pay_rate
+            sum(coalesce(sc.expected_minutes, 0)) as expected_minutes,
+            count(sc.day) as scheduled_days,
+            count(distinct k.day) as days
+       from keys k
+       left join day_summaries ds on ds.tenant_id = $1 and ds.employee_ref = k.employee_ref and ds.day = k.day
+       left join schedules     sc on sc.tenant_id = $1 and sc.employee_ref = k.employee_ref and sc.day = k.day
+       left join memberships   m  on m.tenant_id  = $1 and m.employee_ref  = k.employee_ref
+      group by k.employee_ref, m.name, m.pay_rate
       order by name`,
-    params,
+    [tenantId, f, t],
   );
   return rows.map((r) => {
+    const totalMinutes = Number(r.total_minutes || 0);
     const approvedMinutes = Number(r.approved_minutes || 0);
+    const expectedMinutes = Number(r.expected_minutes || 0);
     const rate = r.pay_rate == null ? null : Number(r.pay_rate);
     return {
       employeeRef: r.employee_ref,
       name: r.name,
       days: Number(r.days || 0),
-      totalMinutes: Number(r.total_minutes || 0),
+      totalMinutes,
       approvedMinutes,
+      expectedMinutes,
+      hasSchedule: Number(r.scheduled_days || 0) > 0,
+      differenceMinutes: totalMinutes - expectedMinutes,
       payRate: rate,
       approvedPay: rate == null ? null : Math.round((approvedMinutes / 60) * rate * 100) / 100,
     };
   });
+}
+
+// ---- schedules (optional per-person, per-day expected minutes) -------------
+export async function listSchedules(tenantId, { from = null, to = null, employeeRef = null } = {}) {
+  const params = [tenantId];
+  const clauses = ['s.tenant_id = $1'];
+  if (from) { params.push(from); clauses.push(`s.day >= $${params.length}`); }
+  if (to) { params.push(to); clauses.push(`s.day <= $${params.length}`); }
+  if (employeeRef) { params.push(employeeRef); clauses.push(`s.employee_ref = $${params.length}`); }
+  const rows = await q(
+    `select s.employee_ref, s.day, s.expected_minutes, s.note, coalesce(m.name, '') as name
+       from schedules s
+       left join memberships m on m.tenant_id = s.tenant_id and m.employee_ref = s.employee_ref
+      where ${clauses.join(' and ')}
+      order by s.day desc, name`,
+    params,
+  );
+  return rows.map((r) => ({
+    employeeRef: r.employee_ref,
+    name: r.name,
+    day: dayStr(r.day),
+    expectedMinutes: Number(r.expected_minutes || 0),
+    note: r.note || '',
+  }));
+}
+
+export async function upsertSchedule(tenantId, { employeeRef, day, expectedMinutes, note = '' }) {
+  const rows = await q(
+    `insert into schedules (tenant_id, employee_ref, day, expected_minutes, note, updated_at)
+     values ($1, $2, $3, $4, $5, now())
+     on conflict (tenant_id, employee_ref, day) do update
+       set expected_minutes = excluded.expected_minutes, note = excluded.note, updated_at = now()
+     returning employee_ref, day, expected_minutes, note`,
+    [tenantId, employeeRef, day, Math.max(0, Math.round(Number(expectedMinutes) || 0)), String(note || '').slice(0, 300)],
+  );
+  const r = rows[0];
+  return { employeeRef: r.employee_ref, day: dayStr(r.day), expectedMinutes: Number(r.expected_minutes || 0), note: r.note || '' };
+}
+
+export async function removeSchedule(tenantId, employeeRef, day) {
+  await q(`delete from schedules where tenant_id = $1 and employee_ref = $2 and day = $3`, [tenantId, employeeRef, day]);
+  return { employeeRef: String(employeeRef), day: String(day), removed: true };
 }

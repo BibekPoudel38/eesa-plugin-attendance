@@ -95,3 +95,18 @@ alter table day_summaries add column if not exists approval_status text not null
 alter table day_summaries add column if not exists approved_by text;
 alter table day_summaries add column if not exists approved_at timestamptz;
 alter table day_summaries add column if not exists exported_at timestamptz;
+
+-- Optional per-person, per-day SCHEDULE (expected minutes). A row = the manager
+-- set an expectation for that day; absence = no expectation. Drives the report's
+-- Actual vs Expected vs Difference comparison.
+create table if not exists schedules (
+    tenant_id        text not null,
+    employee_ref     text not null,
+    day              date not null,
+    expected_minutes integer not null default 0,
+    note             text not null default '',
+    created_at       timestamptz not null default now(),
+    updated_at       timestamptz not null default now(),
+    primary key (tenant_id, employee_ref, day)
+);
+create index if not exists schedules_tenant_day_idx on schedules (tenant_id, day);
