@@ -5,89 +5,270 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Attendance</title>
   <style>
-    :root { --bg:#0f1b21; --card:#16262e; --line:#233842; --ink:#e9f3f4; --muted:#8aa0a8; --accent:#2db4be; }
-    @media (prefers-color-scheme: light){ :root{ --bg:#f4f8f8; --card:#fff; --line:#dce6e6; --ink:#0d1d23; --muted:#657a82; } }
+    :root { --bg:#0f1b21; --card:#16262e; --line:#233842; --ink:#e9f3f4; --muted:#8aa0a8; --accent:#2db4be; --accent-ink:#04222a; --danger:#e0705e; --ok:#5fd08a; }
+    @media (prefers-color-scheme: light){ :root{ --bg:#f4f8f8; --card:#fff; --line:#dce6e6; --ink:#0d1d23; --muted:#657a82; --accent:#178a94; --accent-ink:#fff; } }
     * { box-sizing: border-box; }
-    body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--ink); }
-    header { padding:16px 20px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
+    body { margin:0; font-family: system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--ink); }
+    header { padding:14px 18px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:10px; }
     h1 { font-size:1.05rem; margin:0; }
-    .who { color:var(--muted); font-size:.82rem; }
-    main { padding:20px; display:grid; gap:16px; max-width:760px; }
-    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
-    .card h2 { margin:0 0 10px; font-size:.9rem; color:var(--accent); text-transform:uppercase; letter-spacing:.05em; }
-    table { width:100%; border-collapse:collapse; font-size:.9rem; }
-    td, th { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); }
+    .who { color:var(--muted); font-size:.8rem; text-align:right; }
+    nav { display:flex; gap:6px; padding:10px 14px; overflow-x:auto; border-bottom:1px solid var(--line); }
+    nav button { background:transparent; border:1px solid var(--line); color:var(--muted); padding:6px 12px; border-radius:999px; font-size:.82rem; white-space:nowrap; cursor:pointer; }
+    nav button.active { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+    main { padding:16px; max-width:820px; margin:0 auto; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
+    .card h2 { margin:0 0 10px; font-size:.78rem; color:var(--accent); text-transform:uppercase; letter-spacing:.06em; }
+    table { width:100%; border-collapse:collapse; font-size:.86rem; }
+    td, th { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:middle; }
+    th { color:var(--muted); font-weight:600; font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; }
     .muted { color:var(--muted); }
-    .err { color:#e0705e; }
+    .err { color:var(--danger); }
+    .ok { color:var(--ok); }
+    input, select, button.btn { font:inherit; font-size:.85rem; padding:7px 9px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--ink); }
+    button.btn { cursor:pointer; }
+    button.btn.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+    button.btn.small { padding:4px 8px; font-size:.78rem; }
+    button.btn.link { background:transparent; border:none; color:var(--accent); padding:2px 4px; cursor:pointer; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .field { display:flex; flex-direction:column; gap:4px; font-size:.75rem; color:var(--muted); }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:.72rem; font-weight:600; }
+    .pill.pending { background:rgba(224,196,94,.18); color:#e0c45e; }
+    .pill.approved { background:rgba(95,208,138,.18); color:var(--ok); }
+    .pill.rejected { background:rgba(224,112,94,.18); color:var(--danger); }
+    .big { font-size:1.5rem; font-weight:700; }
+    .toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); background:var(--card); border:1px solid var(--line); padding:9px 14px; border-radius:10px; font-size:.85rem; box-shadow:0 6px 24px rgba(0,0,0,.25); opacity:0; transition:opacity .2s; pointer-events:none; }
+    .toast.show { opacity:1; }
   </style>
 </head>
 <body>
   <header>
-    <h1>Attendance</h1>
+    <h1 id="title">Attendance</h1>
     <span class="who" id="who">connecting…</span>
   </header>
-  <main>
-    <div class="card"><h2>Who's in today</h2><div id="presence" class="muted">Loading…</div></div>
-    <div class="card"><h2>Zones</h2><div id="zones" class="muted">Loading…</div></div>
-  </main>
+  <nav id="nav"></nav>
+  <main id="view"><div class="muted">Loading…</div></main>
+  <div class="toast" id="toast"></div>
 
   <script>
-    // ---- Host ↔ plugin session bridge ----
-    // The Eesa shell embeds this page in a sandboxed frame and hands it a
-    // short-lived UI session token (surface="ui"). We announce readiness, then
-    // wait for the token, then call our own backend with it.
-    let TOKEN = null;
+    let TOKEN = null, CTX = null, TAB = null;
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+    const hrs = (m) => (Number(m || 0) / 60).toFixed(1);
+    const timeOf = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+    const today = () => new Date().toISOString().slice(0, 10);
+    const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
 
-    function api(path) {
-      return fetch(path, { headers: { Authorization: 'Bearer ' + TOKEN } })
-        .then(r => r.json());
+    let toastTimer;
+    function toast(msg, isErr) {
+      const t = $('toast'); t.textContent = msg; t.style.borderColor = isErr ? 'var(--danger)' : 'var(--line)';
+      t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
     }
+
+    async function api(path, { method = 'GET', body = null } = {}) {
+      const opts = { method, headers: { Authorization: 'Bearer ' + TOKEN } };
+      if (body != null) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+      const r = await fetch(path, opts);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error((j.error && (j.error.message || j.error)) || ('HTTP ' + r.status));
+      return j.data;
+    }
+
+    const MANAGER_TABS = [
+      ['team', 'Team'], ['approvals', 'Approvals'], ['report', 'Report'],
+      ['zones', 'Zones'], ['presence', 'Who’s in'], ['settings', 'Settings'],
+    ];
+    const STAFF_TABS = [['me', 'My attendance'], ['history', 'History']];
 
     async function boot() {
       try {
-        const ctx = await api('/api/ui/context');
-        if (!ctx.ok) throw new Error(ctx.error || 'context failed');
-        document.getElementById('who').textContent = ctx.name + ' · ' + ctx.tenant;
-        const isAdmin = (ctx.scopes || []).includes('attendance:admin');
-
-        if (isAdmin) {
-          const pres = await api('/api/admin/presence');
-          renderPresence(pres.data || []);
-          const zones = await api('/api/admin/zones');
-          renderZones(zones.data || []);
-        } else {
-          document.getElementById('presence').innerHTML = '<span class="muted">Admin only.</span>';
-          const zones = await api('/api/getMyZones');
-          renderZones(zones.data || []);
+        CTX = await api('/api/ui/context');
+        $('who').textContent = (CTX.name || '') + (CTX.role ? ' · ' + CTX.role : '');
+        if (!CTX.role) {
+          $('nav').innerHTML = '';
+          $('view').innerHTML = '<div class="card"><h2>No access</h2><p class="muted">You are not enrolled in attendance. Ask your manager to add you.</p></div>';
+          return;
         }
+        const tabs = CTX.role === 'manager' ? MANAGER_TABS : STAFF_TABS;
+        $('nav').innerHTML = tabs.map(([k, l]) => `<button data-tab="${k}">${l}</button>`).join('');
+        $('nav').querySelectorAll('button').forEach((b) => b.onclick = () => go(b.dataset.tab));
+        go(tabs[0][0]);
       } catch (e) {
-        document.getElementById('who').innerHTML = '<span class="err">' + e.message + '</span>';
+        $('who').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
       }
     }
 
-    function renderPresence(rows) {
-      const el = document.getElementById('presence');
-      if (!rows.length) return (el.innerHTML = '<span class="muted">No check-ins yet today.</span>');
-      el.innerHTML = '<table><tr><th>Employee</th><th>Last event</th><th>At</th></tr>' +
-        rows.map(r => `<tr><td>${r.employee_ref}</td><td>${r.type}</td><td>${new Date(r.at).toLocaleTimeString()}</td></tr>`).join('') + '</table>';
-    }
-    function renderZones(rows) {
-      const el = document.getElementById('zones');
-      if (!rows.length) return (el.innerHTML = '<span class="muted">No zones configured.</span>');
-      el.innerHTML = '<table><tr><th>Name</th><th>Radius</th></tr>' +
-        rows.map(z => `<tr><td>${z.name}</td><td>${z.radius_m} m</td></tr>`).join('') + '</table>';
+    function go(tab) {
+      TAB = tab;
+      $('nav').querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+      $('view').innerHTML = '<div class="muted">Loading…</div>';
+      (VIEWS[tab] || (() => {}))();
     }
 
+    // ---------------- Manager: Team / roles ----------------
+    const VIEWS = {};
+    VIEWS.team = async () => {
+      const rows = await api('/api/admin/members');
+      $('view').innerHTML = `<div class="card"><h2>Team &amp; roles</h2>
+        <p class="muted" style="margin-top:0">Assign a role to everyone who needs attendance. No role = no access. Set an hourly pay rate for the report + QuickBooks.</p>
+        <table><tr><th>Name</th><th>Role</th><th>Pay/hr</th><th></th></tr>
+        ${rows.map((u, i) => `<tr>
+          <td>${esc(u.name || u.email || u.employeeRef)}<div class="muted" style="font-size:.72rem">${esc(u.email || '')}</div></td>
+          <td><select id="r${i}">
+            <option value="" ${!u.role ? 'selected' : ''}>None</option>
+            <option value="staff" ${u.role === 'staff' ? 'selected' : ''}>Staff</option>
+            <option value="manager" ${u.role === 'manager' ? 'selected' : ''}>Manager</option>
+          </select></td>
+          <td><input id="p${i}" style="width:80px" type="number" min="0" step="0.5" value="${u.payRate == null ? '' : u.payRate}" placeholder="—"></td>
+          <td><button class="btn small primary" id="s${i}">Save</button></td>
+        </tr>`).join('')}</table></div>`;
+      rows.forEach((u, i) => {
+        $('s' + i).onclick = async () => {
+          const role = $('r' + i).value;
+          const payRate = $('p' + i).value === '' ? null : Number($('p' + i).value);
+          try {
+            if (!role) { await api('/api/admin/members/' + encodeURIComponent(u.employeeRef), { method: 'DELETE' }); toast('Removed'); }
+            else { await api('/api/admin/members', { method: 'POST', body: { employeeRef: u.employeeRef, role, payRate, name: u.name, email: u.email } }); toast('Saved'); }
+          } catch (e) { toast(e.message, true); }
+        };
+      });
+    };
+
+    // ---------------- Manager: Approvals + manual entry ----------------
+    VIEWS.approvals = async () => {
+      $('view').innerHTML = `<div class="card"><h2>Approvals</h2>
+        <div class="row" style="margin-bottom:10px">
+          <label class="field">From<input type="date" id="af" value="${daysAgo(7)}"></label>
+          <label class="field">To<input type="date" id="at" value="${today()}"></label>
+          <label class="field">Status<select id="as"><option value="">All</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></label>
+          <button class="btn" id="ag" style="align-self:flex-end">Apply</button>
+        </div>
+        <div id="alist" class="muted">Loading…</div></div>
+        <div class="card"><h2>Manual entry</h2>
+          <p class="muted" style="margin-top:0">Log a check-in/out for someone as a fallback.</p>
+          <div class="row"><select id="mref"></select>
+            <select id="mtype"><option value="check_in">Check in</option><option value="check_out">Check out</option></select>
+            <button class="btn primary" id="msave">Log</button></div>
+        </div>`;
+      const load = async () => {
+        const q = new URLSearchParams({ from: $('af').value, to: $('at').value, ...($('as').value ? { status: $('as').value } : {}) });
+        const rows = await api('/api/admin/approvals?' + q);
+        $('alist').innerHTML = rows.length ? `<table><tr><th>Name</th><th>Day</th><th>In</th><th>Out</th><th>Hours</th><th>Status</th><th></th></tr>
+          ${rows.map((r) => `<tr>
+            <td>${esc(r.name || r.employeeRef)}</td><td>${r.day}</td><td>${timeOf(r.firstIn)}</td><td>${timeOf(r.lastOut)}</td><td>${hrs(r.totalMinutes)}</td>
+            <td><span class="pill ${r.approvalStatus}">${r.approvalStatus}</span></td>
+            <td><button class="btn link" data-a="approved" data-e="${esc(r.employeeRef)}" data-d="${r.day}">Approve</button>
+                <button class="btn link" data-a="rejected" data-e="${esc(r.employeeRef)}" data-d="${r.day}">Reject</button></td>
+          </tr>`).join('')}</table>` : '<span class="muted">No records in range.</span>';
+        $('alist').querySelectorAll('button[data-a]').forEach((b) => b.onclick = async () => {
+          try { await api('/api/admin/approvals', { method: 'POST', body: { employeeRef: b.dataset.e, day: b.dataset.d, status: b.dataset.a } }); toast(b.dataset.a); load(); }
+          catch (e) { toast(e.message, true); }
+        });
+      };
+      $('ag').onclick = load;
+      // members for the manual-entry picker
+      const members = (await api('/api/admin/members')).filter((m) => m.role);
+      $('mref').innerHTML = members.map((m) => `<option value="${esc(m.employeeRef)}">${esc(m.name || m.employeeRef)}</option>`).join('') || '<option value="">No enrolled staff</option>';
+      $('msave').onclick = async () => {
+        try { await api('/api/admin/manual-entry', { method: 'POST', body: { employeeRef: $('mref').value, type: $('mtype').value } }); toast('Logged'); load(); }
+        catch (e) { toast(e.message, true); }
+      };
+      load();
+    };
+
+    // ---------------- Manager: Report ----------------
+    VIEWS.report = async () => {
+      $('view').innerHTML = `<div class="card"><h2>Report</h2>
+        <div class="row" style="margin-bottom:10px">
+          <label class="field">From<input type="date" id="rf" value="${daysAgo(30)}"></label>
+          <label class="field">To<input type="date" id="rt" value="${today()}"></label>
+          <button class="btn" id="rg" style="align-self:flex-end">Run</button></div>
+        <div id="rout" class="muted">Choose a range and run.</div></div>`;
+      const run = async () => {
+        const q = new URLSearchParams({ from: $('rf').value, to: $('rt').value });
+        const rows = await api('/api/admin/report?' + q);
+        $('rout').innerHTML = rows.length ? `<table><tr><th>Name</th><th>Days</th><th>Hours</th><th>Approved h</th><th>Pay</th></tr>
+          ${rows.map((r) => `<tr><td>${esc(r.name || r.employeeRef)}</td><td>${r.days}</td><td>${hrs(r.totalMinutes)}</td><td>${hrs(r.approvedMinutes)}</td><td>${r.approvedPay == null ? '—' : '$' + r.approvedPay.toFixed(2)}</td></tr>`).join('')}</table>`
+          : '<span class="muted">No data in range.</span>';
+      };
+      $('rg').onclick = run; run();
+    };
+
+    // ---------------- Manager: Zones ----------------
+    VIEWS.zones = async () => {
+      const zones = await api('/api/admin/zones');
+      $('view').innerHTML = `<div class="card"><h2>Work zones</h2>
+        <div id="zlist">${zones.length ? `<table><tr><th>Name</th><th>Radius</th><th>Location</th><th></th></tr>
+          ${zones.map((z) => `<tr><td>${esc(z.name)}</td><td>${Math.round(z.radiusM)} m</td><td class="muted">${z.lat.toFixed(4)}, ${z.lng.toFixed(4)}</td>
+          <td><button class="btn link" data-z="${esc(z.id)}">Remove</button></td></tr>`).join('')}</table>` : '<span class="muted">No zones yet.</span>'}</div></div>
+        <div class="card"><h2>Add zone</h2>
+          <div class="row"><input id="zn" placeholder="Zone name" style="flex:1">
+            <button class="btn" id="zloc">Use my location</button></div>
+          <div class="row" style="margin-top:8px"><input id="zlat" placeholder="lat" style="width:110px"><input id="zlng" placeholder="lng" style="width:110px">
+            <input id="zr" type="number" value="100" style="width:90px"> m
+            <button class="btn primary" id="zadd">Add</button></div>
+          <div id="zloc-msg" class="muted" style="font-size:.75rem;margin-top:6px"></div></div>`;
+      $('zlist').querySelectorAll('button[data-z]').forEach((b) => b.onclick = async () => {
+        try { await api('/api/admin/zones/' + encodeURIComponent(b.dataset.z), { method: 'DELETE' }); toast('Removed'); go('zones'); } catch (e) { toast(e.message, true); }
+      });
+      $('zloc').onclick = () => {
+        $('zloc-msg').textContent = 'Locating…';
+        navigator.geolocation.getCurrentPosition(
+          (p) => { $('zlat').value = p.coords.latitude.toFixed(6); $('zlng').value = p.coords.longitude.toFixed(6); $('zloc-msg').textContent = 'Location set.'; },
+          (e) => { $('zloc-msg').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; });
+      };
+      $('zadd').onclick = async () => {
+        const name = $('zn').value.trim(), lat = Number($('zlat').value), lng = Number($('zlng').value), radius = Number($('zr').value) || 100;
+        if (!name || !$('zlat').value || !$('zlng').value) return toast('Name + location required', true);
+        try { await api('/api/admin/zones', { method: 'POST', body: { name, lat, lng, radius } }); toast('Zone added'); go('zones'); } catch (e) { toast(e.message, true); }
+      };
+    };
+
+    // ---------------- Manager: Presence ----------------
+    VIEWS.presence = async () => {
+      const d = await api('/api/admin/presence');
+      const rows = d.employees || [];
+      const inNow = rows.filter((r) => r.checkedIn).length;
+      $('view').innerHTML = `<div class="card"><h2>Who’s in today</h2>
+        <div class="big">${inNow} <span class="muted" style="font-size:.9rem">in now</span></div>
+        ${rows.length ? `<table style="margin-top:10px"><tr><th>Employee</th><th>Status</th><th>Since</th></tr>
+        ${rows.map((r) => `<tr><td>${esc(r.employeeRef)}</td><td>${r.checkedIn ? '<span class="ok">In</span>' : 'Out'}</td><td>${timeOf(r.at)}</td></tr>`).join('')}</table>`
+        : '<p class="muted">No activity today.</p>'}</div>`;
+    };
+
+    // ---------------- Manager: Settings ----------------
+    VIEWS.settings = async () => {
+      const s = await api('/api/admin/settings');
+      $('view').innerHTML = `<div class="card"><h2>Settings</h2>
+        <label class="field">Time zone (for day boundaries)
+          <input id="tz" value="${esc(s.timezone || 'UTC')}" placeholder="e.g. Asia/Kathmandu" style="max-width:260px"></label>
+        <div style="margin-top:10px"><button class="btn primary" id="tzsave">Save</button></div></div>`;
+      $('tzsave').onclick = async () => {
+        try { await api('/api/admin/settings', { method: 'PUT', body: { timezone: $('tz').value.trim() || 'UTC' } }); toast('Saved'); } catch (e) { toast(e.message, true); }
+      };
+    };
+
+    // ---------------- Staff: My attendance ----------------
+    VIEWS.me = async () => {
+      const [st, zones] = await Promise.all([api('/api/getMyStatus'), api('/api/getMyZones')]);
+      $('view').innerHTML = `<div class="card"><h2>Today</h2>
+        <div class="big">${st.checkedIn ? '<span class="ok">Checked in</span>' : 'Not checked in'}</div>
+        <p class="muted">${hrs(st.todayMinutes)} h worked today${st.since ? ' · since ' + timeOf(st.since) : ''}</p></div>
+        <div class="card"><h2>Your work zones</h2>${zones.length ? `<table><tr><th>Name</th><th>Radius</th></tr>${zones.map((z) => `<tr><td>${esc(z.name)}</td><td>${Math.round(z.radiusM)} m</td></tr>`).join('')}</table>` : '<span class="muted">No zones assigned.</span>'}</div>`;
+    };
+
+    // ---------------- Staff: History ----------------
+    VIEWS.history = async () => {
+      const rows = await api('/api/getMyHistory?days=30');
+      $('view').innerHTML = `<div class="card"><h2>Last 30 days</h2>${rows.length ? `<table><tr><th>Day</th><th>In</th><th>Out</th><th>Hours</th><th>Status</th></tr>
+        ${rows.map((r) => `<tr><td>${r.date}</td><td>${timeOf(r.firstIn)}</td><td>${timeOf(r.lastOut)}</td><td>${hrs(r.totalMinutes)}</td><td>${esc(r.status)}</td></tr>`).join('')}</table>`
+        : '<span class="muted">No records yet.</span>'}</div>`;
+    };
+
+    // ---- Host ↔ plugin session bridge ----
     window.addEventListener('message', (ev) => {
       const msg = ev.data || {};
-      if (msg.type === 'eesa:session' && msg.token) {
-        TOKEN = msg.token;
-        boot();
-      }
+      if (msg.type === 'eesa:session' && msg.token) { TOKEN = msg.token; boot(); }
     });
-    // Web (iframe): announce readiness so the host sends the session token.
-    // Flutter (top-level webview): the host injects the session via
-    // window.postMessage after load — the 'message' listener above handles both.
     if (window.parent && window.parent !== window) {
       window.parent.postMessage({ type: 'eesa:plugin-ready', plugin: 'attendance' }, '*');
     }
