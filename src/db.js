@@ -196,3 +196,70 @@ async function upsertDaySummary(tenantId, employeeRef) {
     [tenantId, employeeRef, t.firstIn, t.lastOut, t.totalMinutes],
   );
 }
+
+// ---- membership / roles (plugin-owned) ------------------------------------
+const memberOut = (m) =>
+  m && {
+    employeeRef: m.employee_ref,
+    role: m.role,
+    payRate: m.pay_rate == null ? null : Number(m.pay_rate),
+    name: m.name,
+    email: m.email,
+  };
+
+// The caller's role, or null when they aren't enrolled (→ no access).
+export async function getMembership(tenantId, employeeRef) {
+  const rows = await q(
+    `select employee_ref, role, pay_rate, name, email from memberships
+      where tenant_id = $1 and employee_ref = $2 and active = true`,
+    [tenantId, employeeRef],
+  );
+  return memberOut(rows[0]) || null;
+}
+
+export async function listMembers(tenantId) {
+  const rows = await q(
+    `select employee_ref, role, pay_rate, name, email from memberships
+      where tenant_id = $1 and active = true order by name, employee_ref`,
+    [tenantId],
+  );
+  return rows.map(memberOut);
+}
+
+export async function upsertMember(tenantId, { employeeRef, role = 'staff', payRate = null, name = '', email = '' }) {
+  const validRole = role === 'manager' ? 'manager' : 'staff';
+  const rows = await q(
+    `insert into memberships (tenant_id, employee_ref, role, pay_rate, name, email, active, updated_at)
+     values ($1, $2, $3, $4, $5, $6, true, now())
+     on conflict (tenant_id, employee_ref) do update
+       set role = excluded.role, pay_rate = excluded.pay_rate, name = excluded.name,
+           email = excluded.email, active = true, updated_at = now()
+     returning employee_ref, role, pay_rate, name, email`,
+    [tenantId, employeeRef, validRole, payRate, String(name || '').slice(0, 200), String(email || '').slice(0, 200)],
+  );
+  return memberOut(rows[0]);
+}
+
+export async function removeMember(tenantId, employeeRef) {
+  await q(
+    `update memberships set active = false, updated_at = now()
+      where tenant_id = $1 and employee_ref = $2`,
+    [tenantId, employeeRef],
+  );
+  return { employeeRef: String(employeeRef), removed: true };
+}
+
+// ---- tenant settings (timezone) -------------------------------------------
+export async function getTenantTimezone(tenantId) {
+  const rows = await q(`select timezone from tenant_settings where tenant_id = $1`, [tenantId]);
+  return rows[0]?.timezone || 'UTC';
+}
+
+export async function setTenantTimezone(tenantId, timezone) {
+  await q(
+    `insert into tenant_settings (tenant_id, timezone, updated_at) values ($1, $2, now())
+     on conflict (tenant_id) do update set timezone = excluded.timezone, updated_at = now()`,
+    [tenantId, String(timezone || 'UTC').slice(0, 64)],
+  );
+  return { timezone };
+}
