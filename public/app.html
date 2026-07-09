@@ -205,6 +205,11 @@
     .zpin { width:16px; height:16px; box-sizing:border-box; border-radius:50%; background:var(--primary); border:2px solid #fff; box-shadow:0 0 0 1px var(--primary); cursor:grab; }
     .zhandle { width:14px; height:14px; box-sizing:border-box; border-radius:50%; background:#fff; border:2px solid var(--primary); cursor:ew-resize; }
     .map-hint { font-size:.74rem; color:var(--muted); margin:-2px 0 10px; }
+    /* Per-user job-type picks */
+    .wtwrap { display:flex; flex-wrap:wrap; gap:8px 16px; }
+    .wtchk { display:inline-flex; align-items:center; gap:6px; font-size:.82rem; white-space:nowrap; }
+    .wtchk input { width:auto; }
+    tr.wtrow td { padding-top:2px; }
   </style>
 </head>
 <body>
@@ -379,6 +384,7 @@
     VIEWS.team = async () => {
       const resp = await apiFull('/api/admin/members');
       const rows = resp.data || [];
+      const catalog = await api('/api/admin/work-types').catch(() => []);
       const d = resp.diag;
       const banner = (rows.length === 0 && d && d.error)
         ? `<div class="card" style="border-color:var(--danger)">
@@ -390,7 +396,12 @@
         <h2>${ic('users')} Team &amp; roles</h2>
         <p class="lead">Assign a role to everyone who needs attendance. No role = no access. Set an hourly pay rate for the report &amp; QuickBooks.</p>
         ${rows.length ? `<table><thead><tr><th>Name</th><th>Role</th><th>Pay/hr</th><th></th></tr></thead><tbody>
-        ${rows.map((u, i) => `<tr>
+        ${rows.map((u, i) => {
+          const ids = u.workTypeIds || [];
+          const jobs = catalog.length
+            ? catalog.map((w) => `<label class="wtchk"><input type="checkbox" data-wt="${i}" value="${esc(w.id)}" ${ids.includes(w.id) ? 'checked' : ''}> ${esc(w.name)}</label>`).join('')
+            : '<span class="muted" style="font-size:.72rem">Add work types in Settings to assign them.</span>';
+          return `<tr>
           <td><div style="font-weight:600">${esc(u.name || u.email || u.employeeRef)}</div><div class="muted" style="font-size:.74rem">${esc(u.email || '')}</div></td>
           <td><select id="r${i}">
             <option value="" ${!u.role ? 'selected' : ''}>None</option>
@@ -399,41 +410,66 @@
           </select></td>
           <td><input id="p${i}" style="width:84px" type="number" min="0" step="0.5" value="${u.payRate == null ? '' : u.payRate}" placeholder="—"></td>
           <td><button class="btn small primary" id="s${i}">Save</button></td>
-        </tr>`).join('')}</tbody></table>` : empty('users', 'No teammates found in your workspace roster.')}</div>`;
+        </tr>
+        <tr class="wtrow"><td colspan="4"><div class="muted" style="font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">Job types</div><div class="wtwrap">${jobs}</div></td></tr>`;
+        }).join('')}</tbody></table>` : empty('users', 'No teammates found in your workspace roster.')}</div>`;
       rows.forEach((u, i) => {
         $('s' + i).onclick = async () => {
           const role = $('r' + i).value;
           const payRate = $('p' + i).value === '' ? null : Number($('p' + i).value);
+          const workTypeIds = [...document.querySelectorAll('input[data-wt="' + i + '"]:checked')].map((c) => c.value);
           try {
             if (!role) { await api('/api/admin/members/' + encodeURIComponent(u.employeeRef), { method: 'DELETE' }); toast('Removed'); }
-            else { await api('/api/admin/members', { method: 'POST', body: { employeeRef: u.employeeRef, role, payRate, name: u.name, email: u.email } }); toast('Saved'); }
+            else { await api('/api/admin/members', { method: 'POST', body: { employeeRef: u.employeeRef, role, payRate, name: u.name, email: u.email, workTypeIds } }); toast('Saved'); }
           } catch (e) { toast(e.message, true); }
         };
       });
     };
 
     VIEWS.schedule = async () => {
-      const members = (await api('/api/admin/members')).filter((m) => m.role);
+      const [members, templates] = await Promise.all([
+        api('/api/admin/members').then((m) => m.filter((x) => x.role)),
+        api('/api/admin/templates').catch(() => []),
+      ]);
+      const brk = (t) => (t.breakStart && t.breakEnd) ? ` · break ${t.breakStart}–${t.breakEnd}` : '';
       $('view').innerHTML = `<div class="card">
-        <h2>${ic('calendar')} Set a schedule</h2>
-        <p class="lead">Optional. Set expected hours for a person on a day; the report then compares actual vs expected.</p>
+        <h2>${ic('calendar')} Assign a schedule</h2>
+        <p class="lead">Set what's expected for a person on a day — pick a shift template or enter hours. The report then compares actual vs expected.</p>
         <div class="row">
           <label class="field">Person<select id="sref">${members.map((m) => `<option value="${esc(m.employeeRef)}">${esc(m.name || m.employeeRef)}</option>`).join('') || '<option value="">No enrolled staff</option>'}</select></label>
           <label class="field">Day<input type="date" id="sday" value="${today()}"></label>
-          <label class="field">Expected hours<input id="shrs" type="number" min="0" step="0.5" value="8" style="width:96px"></label>
+          <label class="field">Template<select id="stpl"><option value="">Custom hours…</option>${templates.map((t) => `<option value="${esc(t.id)}">${esc(t.name)} (${hrs(t.expectedMinutes)}h)</option>`).join('')}</select></label>
+          <label class="field" id="shrsField">Expected hours<input id="shrs" type="number" min="0" step="0.5" value="8" style="width:96px"></label>
           <button class="btn primary" id="ssave" style="align-self:flex-end">Save</button>
         </div></div>
-        <div class="card"><h2>${ic('calendar')} Schedules</h2>
+        <div class="card"><h2>${ic('calendar')} Shift templates</h2>
+          <p class="lead">Reusable shifts you can assign above. The break is optional.</p>
+          <div id="tpllist">${templates.length
+            ? `<table><thead><tr><th>Name</th><th>Shift</th><th>Hours</th><th></th></tr></thead><tbody>${templates.map((t) => `<tr><td style="font-weight:600">${esc(t.name)}</td><td class="num">${esc(t.startTime)}–${esc(t.endTime)}<span class="muted">${brk(t)}</span></td><td class="num">${hrs(t.expectedMinutes)} h</td><td><button class="btn link" style="color:var(--danger)" data-t="${esc(t.id)}">Remove</button></td></tr>`).join('')}</tbody></table>`
+            : empty('calendar', 'No templates yet — create one below.')}</div>
+          <div class="row" style="margin-top:12px;align-items:flex-end">
+            <input id="tpn" placeholder="Template name" style="flex:1;min-width:140px">
+            <label class="field">Start<input type="time" id="tps"></label>
+            <label class="field">End<input type="time" id="tpe"></label>
+            <label class="field">Break start<input type="time" id="tpbs"></label>
+            <label class="field">Break end<input type="time" id="tpbe"></label>
+            <button class="btn primary" id="tpadd">Add</button>
+          </div>
+        </div>
+        <div class="card"><h2>${ic('calendar')} Scheduled days</h2>
           <div class="row" style="margin-bottom:12px">
             <label class="field">From<input type="date" id="sf" value="${daysAgo(7)}"></label>
             <label class="field">To<input type="date" id="st" value="${daysAgo(-14)}"></label>
             <button class="btn" id="sg" style="align-self:flex-end">Apply</button></div>
           <div id="slist" class="muted">Loading…</div></div>`;
+      // Template picker toggles the manual-hours field.
+      const syncHrs = () => { $('shrsField').style.display = $('stpl').value ? 'none' : 'flex'; };
+      $('stpl').onchange = syncHrs; syncHrs();
       const load = async () => {
         const q = new URLSearchParams({ from: $('sf').value, to: $('st').value });
         const rows = await api('/api/admin/schedules?' + q);
         $('slist').innerHTML = rows.length ? `<table><thead><tr><th>Name</th><th>Day</th><th>Expected</th><th></th></tr></thead><tbody>
-          ${rows.map((r) => `<tr><td>${esc(r.name || r.employeeRef)}</td><td>${esc(dateNice(r.day))}</td><td class="num">${hrs(r.expectedMinutes)} h</td>
+          ${rows.map((r) => `<tr><td>${esc(r.name || r.employeeRef)}</td><td>${esc(dateNice(r.day))}</td><td class="num">${hrs(r.expectedMinutes)} h ${r.note ? `<span class="muted">· ${esc(r.note)}</span>` : ''}</td>
           <td><button class="btn link" data-e="${esc(r.employeeRef)}" data-d="${r.day}">Remove</button></td></tr>`).join('')}</tbody></table>`
           : empty('calendar', 'No schedules in this range.');
         $('slist').querySelectorAll('button[data-e]').forEach((b) => b.onclick = async () => {
@@ -444,9 +480,22 @@
       $('sg').onclick = load;
       $('ssave').onclick = async () => {
         if (!$('sref').value) return toast('No staff to schedule', true);
-        try { await api('/api/admin/schedules', { method: 'POST', body: { employeeRef: $('sref').value, day: $('sday').value, expectedHours: Number($('shrs').value) || 0 } }); toast('Saved'); load(); }
+        const body = { employeeRef: $('sref').value, day: $('sday').value };
+        if ($('stpl').value) body.templateId = $('stpl').value;
+        else body.expectedHours = Number($('shrs').value) || 0;
+        try { await api('/api/admin/schedules', { method: 'POST', body }); toast('Saved'); load(); }
         catch (e) { toast(e.message, true); }
       };
+      $('tpadd').onclick = async () => {
+        const body = { name: $('tpn').value.trim(), startTime: $('tps').value, endTime: $('tpe').value, breakStart: $('tpbs').value || null, breakEnd: $('tpbe').value || null };
+        if (!body.name || !body.startTime || !body.endTime) return toast('Name, start and end are required', true);
+        try { await api('/api/admin/templates', { method: 'POST', body }); toast('Template added'); go('schedule'); }
+        catch (e) { toast(e.message, true); }
+      };
+      $('tpllist').querySelectorAll('button[data-t]').forEach((b) => b.onclick = async () => {
+        try { await api('/api/admin/templates/' + encodeURIComponent(b.dataset.t), { method: 'DELETE' }); toast('Removed'); go('schedule'); }
+        catch (e) { toast(e.message, true); }
+      });
       load();
     };
 
@@ -608,14 +657,29 @@
     };
 
     VIEWS.settings = async () => {
-      const s = await api('/api/admin/settings');
+      const [s, types] = await Promise.all([api('/api/admin/settings'), api('/api/admin/work-types')]);
       $('view').innerHTML = `<div class="card"><h2>${ic('sliders')} Settings</h2>
         <label class="field" style="text-transform:none;letter-spacing:0;font-size:.8rem">Time zone (for day boundaries)
           <input id="tz" value="${esc(s.timezone || 'UTC')}" placeholder="e.g. Asia/Kathmandu" style="max-width:280px;margin-top:4px"></label>
-        <div style="margin-top:14px"><button class="btn primary" id="tzsave">Save</button></div></div>`;
+        <div style="margin-top:14px"><button class="btn primary" id="tzsave">Save</button></div></div>
+        <div class="card"><h2>${ic('user')} Work types</h2>
+          <p class="lead">The job/work types people can pick when they check in. Assign them to each person in the Team tab.</p>
+          <div id="wtlist">${types.length
+            ? `<div class="chips">${types.map((w) => `<span class="chip">${esc(w.name)}<button class="btn link" data-w="${esc(w.id)}" title="Remove" style="padding:0 2px;margin-left:2px">✕</button></span>`).join('')}</div>`
+            : empty('user', 'No work types yet — add your first below.')}</div>
+          <div class="row" style="margin-top:12px"><input id="wtname" placeholder="e.g. Kitchen, Delivery, Front desk" style="flex:1;min-width:180px"><button class="btn primary" id="wtadd">Add</button></div>
+        </div>`;
       $('tzsave').onclick = async () => {
         try { await api('/api/admin/settings', { method: 'PUT', body: { timezone: $('tz').value.trim() || 'UTC' } }); toast('Saved'); } catch (e) { toast(e.message, true); }
       };
+      $('wtadd').onclick = async () => {
+        const name = $('wtname').value.trim();
+        if (!name) return toast('Enter a name', true);
+        try { await api('/api/admin/work-types', { method: 'POST', body: { name } }); toast('Added'); go('settings'); } catch (e) { toast(e.message, true); }
+      };
+      $('view').querySelectorAll('button[data-w]').forEach((b) => b.onclick = async () => {
+        try { await api('/api/admin/work-types/' + encodeURIComponent(b.dataset.w), { method: 'DELETE' }); toast('Removed'); go('settings'); } catch (e) { toast(e.message, true); }
+      });
     };
 
     // ---- Host ↔ plugin session bridge ----

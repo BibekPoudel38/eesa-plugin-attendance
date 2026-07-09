@@ -110,3 +110,44 @@ create table if not exists schedules (
     primary key (tenant_id, employee_ref, day)
 );
 create index if not exists schedules_tenant_day_idx on schedules (tenant_id, day);
+
+-- ===========================================================================
+-- v3: reusable schedule templates + a per-tenant work-type catalog (assigned
+-- per user) + the work type chosen at check-in. Idempotent.
+-- ===========================================================================
+
+-- Reusable shift templates (a LIBRARY the manager assigns). Break is optional.
+-- expected_minutes for an assigned day is computed from (end-start)-break.
+create table if not exists schedule_templates (
+    id           uuid primary key default gen_random_uuid(),
+    tenant_id    text not null,
+    name         text not null,
+    start_time   time not null,
+    end_time     time not null,
+    break_start  time,
+    break_end    time,
+    active       boolean not null default true,
+    created_at   timestamptz not null default now(),
+    updated_at   timestamptz not null default now()
+);
+create index if not exists sched_tpl_tenant_idx on schedule_templates (tenant_id, active);
+
+-- When a schedule was created from a template, remember which (for display).
+alter table schedules add column if not exists template_id uuid;
+
+-- Per-tenant catalog of work/job types. Each is assigned to specific users
+-- (memberships.work_type_ids); a user picks one at check-in ("here to work?").
+create table if not exists work_types (
+    id          uuid primary key default gen_random_uuid(),
+    tenant_id   text not null,
+    name        text not null,
+    active      boolean not null default true,
+    created_at  timestamptz not null default now()
+);
+create index if not exists work_types_tenant_idx on work_types (tenant_id, active);
+
+-- Which catalog work types a user may pick (array of work_types.id as text).
+alter table memberships add column if not exists work_type_ids jsonb not null default '[]'::jsonb;
+
+-- The work type selected for a given presence event (null for check_out / legacy).
+alter table events add column if not exists work_type text;

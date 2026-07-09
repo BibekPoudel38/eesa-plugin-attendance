@@ -119,8 +119,8 @@ app.get('/api/present', async (req, res) => {
 
 // ---- Employee REST hot path (Flutter) — any enrolled user -----------------
 app.post('/api/checkIn', emp, async (req, res) => {
-  const { zoneId = null, lat = null, lng = null, forWork = true, source = 'geofence' } = req.body || {};
-  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', { zoneId, lat, lng, forWork, source });
+  const { zoneId = null, lat = null, lng = null, forWork = true, source = 'geofence', workType = null } = req.body || {};
+  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', { zoneId, lat, lng, forWork, source, workType });
   res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) });
 });
 app.post('/api/checkOut', emp, async (req, res) => {
@@ -132,6 +132,9 @@ app.get('/api/getMyStatus', emp, async (req, res) => res.json({ ok: true, data: 
 app.get('/api/getMyZones', emp, async (req, res) => res.json({ ok: true, data: await db.listZones(req.ctx.tenantId) }));
 app.get('/api/getMyHistory', emp, async (req, res) =>
   res.json({ ok: true, data: await db.myHistory(req.ctx.tenantId, req.ctx.sub, Number(req.query.days) || 7) }));
+// The work types THIS user may pick at check-in ("here to work?" prompt).
+app.get('/api/getMyWorkTypes', emp, async (req, res) =>
+  res.json({ ok: true, data: await db.myWorkTypes(req.ctx.tenantId, req.ctx.sub) }));
 
 // ---- Manager REST — team/roles, zones, presence, settings -----------------
 // Merge the tenant roster (from the main system) with plugin memberships so the
@@ -165,9 +168,9 @@ app.get('/api/admin/members', manager, async (req, res) => {
   res.json(out);
 });
 app.post('/api/admin/members', manager, async (req, res) => {
-  const { employeeRef, role = 'staff', payRate = null, name = '', email = '' } = req.body || {};
+  const { employeeRef, role = 'staff', payRate = null, name = '', email = '', workTypeIds } = req.body || {};
   if (!employeeRef) return res.status(400).json({ ok: false, error: 'employeeRef required' });
-  res.json({ ok: true, data: await db.upsertMember(req.ctx.tenantId, { employeeRef, role, payRate, name, email }) });
+  res.json({ ok: true, data: await db.upsertMember(req.ctx.tenantId, { employeeRef, role, payRate, name, email, workTypeIds }) });
 });
 app.delete('/api/admin/members/:id', manager, async (req, res) =>
   res.json({ ok: true, data: await db.removeMember(req.ctx.tenantId, req.params.id) }));
@@ -225,13 +228,37 @@ app.get('/api/admin/schedules', manager, async (req, res) =>
     from: req.query.from || null, to: req.query.to || null, employeeRef: req.query.employeeRef || null,
   }) }));
 app.post('/api/admin/schedules', manager, async (req, res) => {
-  const { employeeRef, day, expectedMinutes = null, expectedHours = null, note = '' } = req.body || {};
+  const { employeeRef, day, expectedMinutes = null, expectedHours = null, note = '', templateId = null } = req.body || {};
   if (!employeeRef || !day) return res.status(400).json({ ok: false, error: 'employeeRef and day required' });
-  const mins = expectedMinutes != null ? Number(expectedMinutes) : Math.round(Number(expectedHours || 0) * 60);
-  res.json({ ok: true, data: await db.upsertSchedule(req.ctx.tenantId, { employeeRef, day, expectedMinutes: mins, note }) });
+  const mins = expectedMinutes != null
+    ? Number(expectedMinutes)
+    : (expectedHours != null ? Math.round(Number(expectedHours) * 60) : null);
+  try {
+    res.json({ ok: true, data: await db.upsertSchedule(req.ctx.tenantId, { employeeRef, day, expectedMinutes: mins, note, templateId }) });
+  } catch (e) { res.status(e.status || 400).json({ ok: false, error: e.message }); }
 });
 app.delete('/api/admin/schedules/:employeeRef/:day', manager, async (req, res) =>
   res.json({ ok: true, data: await db.removeSchedule(req.ctx.tenantId, req.params.employeeRef, req.params.day) }));
+
+// Reusable schedule templates (the library assigned via a schedule row).
+app.get('/api/admin/templates', manager, async (req, res) =>
+  res.json({ ok: true, data: await db.listTemplates(req.ctx.tenantId) }));
+app.post('/api/admin/templates', manager, async (req, res) => {
+  try { res.json({ ok: true, data: await db.upsertTemplate(req.ctx.tenantId, req.body || {}) }); }
+  catch (e) { res.status(e.status || 400).json({ ok: false, error: e.message }); }
+});
+app.delete('/api/admin/templates/:id', manager, async (req, res) =>
+  res.json({ ok: true, data: await db.removeTemplate(req.ctx.tenantId, req.params.id) }));
+
+// Work-type catalog (assigned per user in Team; picked at check-in).
+app.get('/api/admin/work-types', manager, async (req, res) =>
+  res.json({ ok: true, data: await db.listWorkTypes(req.ctx.tenantId) }));
+app.post('/api/admin/work-types', manager, async (req, res) => {
+  try { res.json({ ok: true, data: await db.upsertWorkType(req.ctx.tenantId, req.body || {}) }); }
+  catch (e) { res.status(e.status || 400).json({ ok: false, error: e.message }); }
+});
+app.delete('/api/admin/work-types/:id', manager, async (req, res) =>
+  res.json({ ok: true, data: await db.removeWorkType(req.ctx.tenantId, req.params.id) }));
 
 // ---- Embedded UI: static shell + a context endpoint (UI session token) ----
 app.get('/app', (req, res) => res.sendFile(join(__dirname, '..', 'public', 'app.html')));

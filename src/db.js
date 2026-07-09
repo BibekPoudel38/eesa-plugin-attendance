@@ -85,12 +85,13 @@ export async function deleteZone(tenantId, zoneId) {
 // ---- events / check-in-out ------------------------------------------------
 export async function recordEvent(
   tenantId, employeeRef, type,
-  { zoneId = null, lat = null, lng = null, forWork = true, source = 'geofence' } = {},
+  { zoneId = null, lat = null, lng = null, forWork = true, source = 'geofence', workType = null } = {},
 ) {
   const rows = await q(
-    `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, for_work, source)
-     values ($1, $2, $3, $4, $5, $6, $7, $8) returning id, type, at`,
-    [tenantId, employeeRef, type, zoneId, lat, lng, forWork !== false, String(source || 'geofence')],
+    `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, for_work, source, work_type)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id, type, at`,
+    [tenantId, employeeRef, type, zoneId, lat, lng, forWork !== false, String(source || 'geofence'),
+     workType ? String(workType).slice(0, 120) : null],
   );
   await upsertDaySummary(tenantId, employeeRef);
   return { id: String(rows[0].id), type: rows[0].type, at: iso(rows[0].at) };
@@ -258,12 +259,13 @@ const memberOut = (m) =>
     payRate: m.pay_rate == null ? null : Number(m.pay_rate),
     name: m.name,
     email: m.email,
+    workTypeIds: Array.isArray(m.work_type_ids) ? m.work_type_ids.map(String) : [],
   };
 
 // The caller's role, or null when they aren't enrolled (→ no access).
 export async function getMembership(tenantId, employeeRef) {
   const rows = await q(
-    `select employee_ref, role, pay_rate, name, email from memberships
+    `select employee_ref, role, pay_rate, name, email, work_type_ids from memberships
       where tenant_id = $1 and employee_ref = $2 and active = true`,
     [tenantId, employeeRef],
   );
@@ -272,25 +274,168 @@ export async function getMembership(tenantId, employeeRef) {
 
 export async function listMembers(tenantId) {
   const rows = await q(
-    `select employee_ref, role, pay_rate, name, email from memberships
+    `select employee_ref, role, pay_rate, name, email, work_type_ids from memberships
       where tenant_id = $1 and active = true order by name, employee_ref`,
     [tenantId],
   );
   return rows.map(memberOut);
 }
 
-export async function upsertMember(tenantId, { employeeRef, role = 'staff', payRate = null, name = '', email = '' }) {
+export async function upsertMember(
+  tenantId,
+  { employeeRef, role = 'staff', payRate = null, name = '', email = '', workTypeIds = null },
+) {
   const validRole = role === 'manager' ? 'manager' : 'staff';
+  const ids = Array.isArray(workTypeIds) ? workTypeIds.map(String) : [];
+  // Keep an existing assignment untouched when the caller doesn't send one
+  // (e.g. the Team-row Save that only changes role/pay) — coalesce to current.
+  const idsParam = workTypeIds == null ? null : JSON.stringify(ids);
   const rows = await q(
-    `insert into memberships (tenant_id, employee_ref, role, pay_rate, name, email, active, updated_at)
-     values ($1, $2, $3, $4, $5, $6, true, now())
+    `insert into memberships (tenant_id, employee_ref, role, pay_rate, name, email, work_type_ids, active, updated_at)
+     values ($1, $2, $3, $4, $5, $6, coalesce($7::jsonb, '[]'::jsonb), true, now())
      on conflict (tenant_id, employee_ref) do update
        set role = excluded.role, pay_rate = excluded.pay_rate, name = excluded.name,
-           email = excluded.email, active = true, updated_at = now()
-     returning employee_ref, role, pay_rate, name, email`,
-    [tenantId, employeeRef, validRole, payRate, String(name || '').slice(0, 200), String(email || '').slice(0, 200)],
+           email = excluded.email,
+           work_type_ids = coalesce($7::jsonb, memberships.work_type_ids),
+           active = true, updated_at = now()
+     returning employee_ref, role, pay_rate, name, email, work_type_ids`,
+    [tenantId, employeeRef, validRole, payRate,
+     String(name || '').slice(0, 200), String(email || '').slice(0, 200), idsParam],
   );
   return memberOut(rows[0]);
+}
+
+// ---- work-type catalog + per-user picks -----------------------------------
+const workTypeOut = (w) => ({ id: String(w.id), name: w.name });
+
+export async function listWorkTypes(tenantId) {
+  const rows = await q(
+    `select id, name from work_types where tenant_id = $1 and active = true order by name`,
+    [tenantId],
+  );
+  return rows.map(workTypeOut);
+}
+
+export async function upsertWorkType(tenantId, { id = null, name }) {
+  const nm = String(name || '').trim().slice(0, 120);
+  if (!nm) throw Object.assign(new Error('name required'), { status: 400 });
+  if (id) {
+    const rows = await q(
+      `update work_types set name = $3 where tenant_id = $1 and id = $2 returning id, name`,
+      [tenantId, id, nm],
+    );
+    return rows[0] ? workTypeOut(rows[0]) : null;
+  }
+  const rows = await q(
+    `insert into work_types (tenant_id, name) values ($1, $2) returning id, name`,
+    [tenantId, nm],
+  );
+  return workTypeOut(rows[0]);
+}
+
+export async function removeWorkType(tenantId, id) {
+  await q(`update work_types set active = false where tenant_id = $1 and id = $2`, [tenantId, id]);
+  return { id: String(id), removed: true };
+}
+
+// The work types a given user may pick at check-in (their assigned subset,
+// resolved to catalog names; silently drops ids no longer in the catalog).
+export async function myWorkTypes(tenantId, employeeRef) {
+  const m = await getMembership(tenantId, employeeRef);
+  const ids = (m && m.workTypeIds) || [];
+  if (!ids.length) return [];
+  const rows = await q(
+    `select id, name from work_types
+      where tenant_id = $1 and active = true and id = any($2::uuid[]) order by name`,
+    [tenantId, ids],
+  );
+  return rows.map(workTypeOut);
+}
+
+// ---- schedule templates (reusable shift library) --------------------------
+const hhmm = (t) => (t == null ? null : String(t).slice(0, 5)); // 'HH:MM'
+const toMin = (t) => {
+  if (!t) return null;
+  const [h, m] = String(t).split(':').map(Number);
+  return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
+};
+// Paid minutes a template represents: (end-start) minus the optional break,
+// wrapping midnight so an overnight shift is positive.
+export function templateMinutes(t) {
+  const start = toMin(t.start_time ?? t.startTime);
+  const end = toMin(t.end_time ?? t.endTime);
+  if (start == null || end == null) return 0;
+  let mins = end - start;
+  if (mins < 0) mins += 1440;
+  const bs = toMin(t.break_start ?? t.breakStart);
+  const be = toMin(t.break_end ?? t.breakEnd);
+  if (bs != null && be != null) {
+    let br = be - bs;
+    if (br < 0) br += 1440;
+    mins -= Math.max(0, br);
+  }
+  return Math.max(0, mins);
+}
+const templateOut = (t) => ({
+  id: String(t.id),
+  name: t.name,
+  startTime: hhmm(t.start_time),
+  endTime: hhmm(t.end_time),
+  breakStart: hhmm(t.break_start),
+  breakEnd: hhmm(t.break_end),
+  expectedMinutes: templateMinutes(t),
+});
+
+export async function listTemplates(tenantId) {
+  const rows = await q(
+    `select id, name, start_time, end_time, break_start, break_end
+       from schedule_templates where tenant_id = $1 and active = true order by name`,
+    [tenantId],
+  );
+  return rows.map(templateOut);
+}
+
+export async function getTemplate(tenantId, id) {
+  const rows = await q(
+    `select id, name, start_time, end_time, break_start, break_end
+       from schedule_templates where tenant_id = $1 and id = $2 and active = true`,
+    [tenantId, id],
+  );
+  return rows[0] ? templateOut(rows[0]) : null;
+}
+
+export async function upsertTemplate(tenantId, { id = null, name, startTime, endTime, breakStart = null, breakEnd = null }) {
+  const nm = String(name || '').trim().slice(0, 120);
+  if (!nm || !startTime || !endTime) {
+    throw Object.assign(new Error('name, startTime and endTime are required'), { status: 400 });
+  }
+  const bs = breakStart || null;
+  const be = breakEnd || null;
+  if ((bs && !be) || (be && !bs)) {
+    throw Object.assign(new Error('break needs both a start and an end (or neither)'), { status: 400 });
+  }
+  if (id) {
+    const rows = await q(
+      `update schedule_templates
+          set name = $3, start_time = $4, end_time = $5, break_start = $6, break_end = $7, updated_at = now()
+        where tenant_id = $1 and id = $2
+      returning id, name, start_time, end_time, break_start, break_end`,
+      [tenantId, id, nm, startTime, endTime, bs, be],
+    );
+    return rows[0] ? templateOut(rows[0]) : null;
+  }
+  const rows = await q(
+    `insert into schedule_templates (tenant_id, name, start_time, end_time, break_start, break_end)
+     values ($1, $2, $3, $4, $5, $6)
+     returning id, name, start_time, end_time, break_start, break_end`,
+    [tenantId, nm, startTime, endTime, bs, be],
+  );
+  return templateOut(rows[0]);
+}
+
+export async function removeTemplate(tenantId, id) {
+  await q(`update schedule_templates set active = false where tenant_id = $1 and id = $2`, [tenantId, id]);
+  return { id: String(id), removed: true };
 }
 
 export async function removeMember(tenantId, employeeRef) {
@@ -456,17 +601,36 @@ export async function listSchedules(tenantId, { from = null, to = null, employee
   }));
 }
 
-export async function upsertSchedule(tenantId, { employeeRef, day, expectedMinutes, note = '' }) {
+export async function upsertSchedule(
+  tenantId, { employeeRef, day, expectedMinutes = null, note = '', templateId = null },
+) {
+  let mins = expectedMinutes;
+  let outNote = note;
+  const tplId = templateId || null;
+  // Assigning a template drives the expected hours from (end-start)-break, and
+  // defaults the note to the template's name for a readable Schedule list.
+  if (tplId) {
+    const t = await getTemplate(tenantId, tplId);
+    if (!t) throw Object.assign(new Error('template not found'), { status: 404 });
+    mins = t.expectedMinutes;
+    if (!outNote) outNote = t.name;
+  }
   const rows = await q(
-    `insert into schedules (tenant_id, employee_ref, day, expected_minutes, note, updated_at)
-     values ($1, $2, $3, $4, $5, now())
+    `insert into schedules (tenant_id, employee_ref, day, expected_minutes, note, template_id, updated_at)
+     values ($1, $2, $3, $4, $5, $6, now())
      on conflict (tenant_id, employee_ref, day) do update
-       set expected_minutes = excluded.expected_minutes, note = excluded.note, updated_at = now()
-     returning employee_ref, day, expected_minutes, note`,
-    [tenantId, employeeRef, day, Math.max(0, Math.round(Number(expectedMinutes) || 0)), String(note || '').slice(0, 300)],
+       set expected_minutes = excluded.expected_minutes, note = excluded.note,
+           template_id = excluded.template_id, updated_at = now()
+     returning employee_ref, day, expected_minutes, note, template_id`,
+    [tenantId, employeeRef, day, Math.max(0, Math.round(Number(mins) || 0)),
+     String(outNote || '').slice(0, 300), tplId],
   );
   const r = rows[0];
-  return { employeeRef: r.employee_ref, day: dayStr(r.day), expectedMinutes: Number(r.expected_minutes || 0), note: r.note || '' };
+  return {
+    employeeRef: r.employee_ref, day: dayStr(r.day),
+    expectedMinutes: Number(r.expected_minutes || 0), note: r.note || '',
+    templateId: r.template_id ? String(r.template_id) : null,
+  };
 }
 
 export async function removeSchedule(tenantId, employeeRef, day) {
