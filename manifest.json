@@ -26,5 +26,9 @@
   "roles": [
     {"key": "manager", "label": "Attendance Manager", "description": "Manage zones, approve attendance, run reports, and make manual entries."},
     {"key": "staff", "label": "Staff", "description": "Log own check-in/out and view own attendance."}
+  ],
+  "audiences": [
+    {"key": "present_today", "label": "present today", "path": "/api/present",
+     "description": "Users with at least one check-in today (approval-independent). Lets other platform features — e.g. Flows — target only people who showed up."}
   ]
 }

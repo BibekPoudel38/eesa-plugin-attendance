@@ -103,6 +103,20 @@ app.get('/api/me', async (req, res) => {
   }});
 });
 
+// Platform → plugin: "who was present today" for the generic audience resolver
+// (Flow's presence-gated recipients). Authed by a gateway SERVICE token
+// (sub='gateway') or a tenant admin — never a plain staff token. Tenant-scoped
+// by the token, so it can only read its own tenant's presence.
+app.get('/api/present', async (req, res) => {
+  let ctx;
+  try { ctx = await verifyToken(req.get('Authorization')); }
+  catch (e) { return res.status(e.status || 401).json({ ok: false, error: e.message }); }
+  if (ctx.sub !== 'gateway' && !isPlatformAdmin(ctx)) {
+    return res.status(403).json({ ok: false, error: { code: 'FORBIDDEN', message: 'Service or admin token required.' } });
+  }
+  res.json({ ok: true, data: { present: await db.presentToday(ctx.tenantId) } });
+});
+
 // ---- Employee REST hot path (Flutter) — any enrolled user -----------------
 app.post('/api/checkIn', emp, async (req, res) => {
   const { zoneId = null, lat = null, lng = null, forWork = true, source = 'geofence' } = req.body || {};

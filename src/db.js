@@ -203,6 +203,22 @@ export async function whoIsLate(tenantId, cutoffHour = 9) {
   return rows.map((r) => ({ employeeRef: r.employee_ref, firstIn: iso(r.first_in) }));
 }
 
+// Everyone with at least one check-in today (tenant-LOCAL day), regardless of
+// approval or whether they're still checked in. Powers the platform's generic
+// `present_today` audience (Flow's presence-gated recipients). Returns the bare
+// employee_ref list (== the Eesa user id / token sub) so the platform can map
+// them straight to users.
+export async function presentToday(tenantId) {
+  const tz = await tenantTz(tenantId);
+  const rows = await q(
+    `select distinct employee_ref from events
+       where tenant_id = $1 and type = 'check_in'
+         and at >= (date_trunc('day', now() at time zone $2) at time zone $2)`,
+    [tenantId, tz],
+  );
+  return rows.map((r) => r.employee_ref);
+}
+
 export async function presence(tenantId) {
   const tz = await tenantTz(tenantId);
   const rows = await q(
