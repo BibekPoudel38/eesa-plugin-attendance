@@ -15,8 +15,29 @@ const TOOLS = [
     },
   },
   {
+    name: 'who_is_present',
+    description:
+      'List the employees who are PRESENT today (checked in at least once), with their names. Use this to answer "who is present / here / in today".',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'who_is_absent',
+    description:
+      'List the enrolled employees who are ABSENT today (no check-in), with their names. Use this to answer "who is absent / off / not in today".',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'attendance_summary',
+    description:
+      'Today\'s full attendance in one call: present, absent, and late lists (each with names) plus counts. Use this for "attendance today", "who is in/out", or an overview.',
+    inputSchema: {
+      type: 'object',
+      properties: { cutoff_hour: { type: 'integer', description: 'Late cutoff hour, default 9.' } },
+    },
+  },
+  {
     name: 'who_is_late',
-    description: 'List employees who checked in late today',
+    description: 'List employees who checked in late today (after the cutoff hour), with their names.',
     inputSchema: { type: 'object', properties: { cutoff_hour: { type: 'integer' } } },
   },
   {
@@ -56,8 +77,20 @@ async function runTool(name, args, ctx) {
     const ev = await db.recordEvent(ctx.tenantId, ctx.sub, type, {});
     return { marked: args.status, at: ev.at };
   }
+  if (name === 'who_is_present') {
+    const t = await db.attendanceToday(ctx.tenantId);
+    return { present: t.present, count: t.counts.present };
+  }
+  if (name === 'who_is_absent') {
+    const t = await db.attendanceToday(ctx.tenantId);
+    return { absent: t.absent, count: t.counts.absent };
+  }
+  if (name === 'attendance_summary') {
+    return await db.attendanceToday(ctx.tenantId, args.cutoff_hour || 9);
+  }
   if (name === 'who_is_late') {
-    return { late: await db.whoIsLate(ctx.tenantId, args.cutoff_hour || 9) };
+    const t = await db.attendanceToday(ctx.tenantId, args.cutoff_hour || 9);
+    return { late: t.late, count: t.counts.late };
   }
   if (name === 'get_my_status') {
     return await db.myStatus(ctx.tenantId, ctx.sub);

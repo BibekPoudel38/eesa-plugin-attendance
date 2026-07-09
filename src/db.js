@@ -237,6 +237,42 @@ export async function presence(tenantId) {
   };
 }
 
+// One-shot "state of attendance today" for the agent: present / absent / late,
+// each carried with the person's NAME (not a bare id). PRESENT = enrolled member
+// with >=1 check-in today. ABSENT = enrolled member with none. LATE = checked in
+// after the cutoff hour. Reuses the same tenant-LOCAL-day queries as the rest.
+export async function attendanceToday(tenantId, cutoffHour = 9) {
+  const [members, presentRefs, late] = await Promise.all([
+    listMembers(tenantId),
+    presentToday(tenantId),
+    whoIsLate(tenantId, cutoffHour),
+  ]);
+  const nameOf = new Map(
+    members.map((m) => [String(m.employeeRef), m.name || String(m.employeeRef)]),
+  );
+  const presentSet = new Set(presentRefs.map(String));
+  const named = (ref) => ({ employeeRef: String(ref), name: nameOf.get(String(ref)) || String(ref) });
+
+  const present = [...presentSet].map(named);
+  const absent = members
+    .filter((m) => !presentSet.has(String(m.employeeRef)))
+    .map((m) => named(m.employeeRef));
+  const lateNamed = late.map((l) => ({ ...named(l.employeeRef), firstIn: l.firstIn }));
+
+  return {
+    date: 'today',
+    present,
+    absent,
+    late: lateNamed,
+    counts: {
+      enrolled: members.length,
+      present: present.length,
+      absent: absent.length,
+      late: lateNamed.length,
+    },
+  };
+}
+
 // Recompute today's summary (first_in, last_out, total_minutes) from events.
 async function upsertDaySummary(tenantId, employeeRef) {
   const tz = await tenantTz(tenantId);
