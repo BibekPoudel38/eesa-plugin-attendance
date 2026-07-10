@@ -70,10 +70,12 @@ function isPlatformAdmin(ctx) {
 // positions haven't been minted yet still bootstraps as admin so nobody is
 // locked out of management. Returns 'admin' | 'staff' | null.
 function appRoleOf(ctx) {
+  // appRole is the SOLE authority — Eesa always stamps it for attendance
+  // (admin | staff | none). No platform-admin bootstrap: a user Eesa set to
+  // 'none' gets no access, tenant owner included.
   const claim = String(ctx.appRole || '').toLowerCase();
   if (claim === 'admin') return 'admin';
   if (claim === 'staff') return 'staff';
-  if (!claim && isPlatformAdmin(ctx)) return 'admin'; // bootstrap fallback
   return null;
 }
 // The UI shell branches on a 'manager' | 'staff' | null vocabulary; map onto it.
@@ -95,18 +97,17 @@ function withMember({ manager = false } = {}) {
       // Flutter hot-path token may not, so we fall back to membership existence
       // there to avoid breaking check-in during rollout.
       const member = await db.getMembership(req.ctx.tenantId, req.ctx.sub);
-      const role = appRoleOf(req.ctx); // 'admin' | 'staff' | null (+platform bootstrap)
+      const role = appRoleOf(req.ctx); // 'admin' | 'staff' | null — appRole is the sole authority
+      // appRole is authoritative whenever the token carries the claim (Eesa now
+      // always stamps it for attendance, including 'none'). The legacy membership
+      // fallback applies ONLY to no-claim tokens (the Flutter hot path), so a user
+      // Eesa set to none/staff can never slip in via a stale membership row.
+      const hasAppRoleClaim = req.ctx.appRole != null && String(req.ctx.appRole) !== '';
       if (manager) {
-        // appRole is the authority whenever the token carries the claim. The
-        // legacy manager-membership fallback applies ONLY to tokens with no
-        // appRole claim at all (the Flutter hot-path), so a user demoted to
-        // staff in Eesa (appRole='staff') can never regain manager access via a
-        // stale membership.role='manager' row.
-        const hasAppRoleClaim = req.ctx.appRole != null && String(req.ctx.appRole) !== '';
         if (!(role === 'admin' || (!hasAppRoleClaim && member && member.role === 'manager'))) {
           return res.status(403).json({ ok: false, error: { code: 'FORBIDDEN', message: 'Admin access required.' } });
         }
-      } else if (!(role !== null || member)) {
+      } else if (!(role !== null || (!hasAppRoleClaim && member))) {
         return res.status(403).json({ ok: false, error: { code: 'NOT_ENROLLED', message: 'You are not enrolled in attendance.' } });
       }
       req.member = member;
