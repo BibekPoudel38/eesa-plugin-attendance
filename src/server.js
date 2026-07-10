@@ -61,6 +61,26 @@ app.post('/mcp', async (req, res) => {
 function isPlatformAdmin(ctx) {
   return String(ctx.role || '').toUpperCase() === 'ADMIN';
 }
+
+// The Eesa-owned "appRole" claim is the AUTHORITY for admin/staff/none — derived
+// server-side from the acting user's attendance positions (attendance-admin →
+// admin, attendance-required → staff, precedence admin > staff). The plugin's
+// own membership.role no longer decides access; the membership row survives only
+// to carry pay_rate/work_types. During rollout a platform tenant-admin whose
+// positions haven't been minted yet still bootstraps as admin so nobody is
+// locked out of management. Returns 'admin' | 'staff' | null.
+function appRoleOf(ctx) {
+  const claim = String(ctx.appRole || '').toLowerCase();
+  if (claim === 'admin') return 'admin';
+  if (claim === 'staff') return 'staff';
+  if (!claim && isPlatformAdmin(ctx)) return 'admin'; // bootstrap fallback
+  return null;
+}
+// The UI shell branches on a 'manager' | 'staff' | null vocabulary; map onto it.
+function uiRoleOf(ctx) {
+  const r = appRoleOf(ctx);
+  return r === 'admin' ? 'manager' : r === 'staff' ? 'staff' : null;
+}
 function withMember({ manager = false } = {}) {
   return async (req, res, next) => {
     try {
@@ -69,16 +89,28 @@ function withMember({ manager = false } = {}) {
       return res.status(e.status || 401).json({ ok: false, error: e.message });
     }
     try {
+      // The membership row is loaded only for pay_rate/work_types (and as a
+      // legacy fallback below); it no longer decides access. The Eesa-owned
+      // appRole claim is the authority. UI-session tokens carry appRole; the
+      // Flutter hot-path token may not, so we fall back to membership existence
+      // there to avoid breaking check-in during rollout.
       const member = await db.getMembership(req.ctx.tenantId, req.ctx.sub);
-      const admin = isPlatformAdmin(req.ctx);
+      const role = appRoleOf(req.ctx); // 'admin' | 'staff' | null (+platform bootstrap)
       if (manager) {
-        if (!(admin || (member && member.role === 'manager'))) {
-          return res.status(403).json({ ok: false, error: { code: 'FORBIDDEN', message: 'Manager access required.' } });
+        // appRole is the authority whenever the token carries the claim. The
+        // legacy manager-membership fallback applies ONLY to tokens with no
+        // appRole claim at all (the Flutter hot-path), so a user demoted to
+        // staff in Eesa (appRole='staff') can never regain manager access via a
+        // stale membership.role='manager' row.
+        const hasAppRoleClaim = req.ctx.appRole != null && String(req.ctx.appRole) !== '';
+        if (!(role === 'admin' || (!hasAppRoleClaim && member && member.role === 'manager'))) {
+          return res.status(403).json({ ok: false, error: { code: 'FORBIDDEN', message: 'Admin access required.' } });
         }
-      } else if (!member) {
+      } else if (!(role !== null || member)) {
         return res.status(403).json({ ok: false, error: { code: 'NOT_ENROLLED', message: 'You are not enrolled in attendance.' } });
       }
       req.member = member;
+      req.appRole = role;
       next();
     } catch {
       return res.status(500).json({ ok: false, error: 'membership lookup failed' });
@@ -95,9 +127,13 @@ app.get('/api/me', async (req, res) => {
   catch (e) { return res.status(e.status || 401).json({ ok: false, error: e.message }); }
   const member = await db.getMembership(ctx.tenantId, ctx.sub);
   const admin = isPlatformAdmin(ctx);
+  // appRole (Eesa authority) decides access; the membership row is kept only for
+  // pay_rate/work_types and no longer drives role.
+  const appRole = appRoleOf(ctx);
   res.json({ ok: true, data: {
-    role: (member && member.role) || (admin ? 'manager' : null),
-    enrolled: !!member,
+    appRole,                     // 'admin' | 'staff' | null (authority)
+    role: uiRoleOf(ctx),         // 'manager' | 'staff' | null (UI vocabulary)
+    enrolled: appRole !== null,
     isPlatformAdmin: admin,
     member: member || null,
   }});
@@ -310,12 +346,15 @@ app.get('/api/ui/context', authMiddleware({ surface: 'ui' }), async (req, res) =
   const admin = isPlatformAdmin(req.ctx);
   // Wrap in `data` — the UI's api() helper returns j.data, like every other
   // endpoint. Top-level fields here made CTX undefined → "reading 'name'".
+  // appRole (Eesa authority) is what boot() branches on; role is the mapped
+  // UI vocabulary kept for backwards-compat.
   res.json({
     ok: true,
     data: {
       tenant: req.ctx.tenantId,
       name: req.ctx.email || req.ctx.sub,
-      role: (member && member.role) || (admin ? 'manager' : null),
+      appRole: appRoleOf(req.ctx),   // 'admin' | 'staff' | null (authority)
+      role: uiRoleOf(req.ctx),       // 'manager' | 'staff' | null
       isPlatformAdmin: admin,
     },
   });
