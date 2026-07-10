@@ -41,6 +41,12 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: { cutoff_hour: { type: 'integer' } } },
   },
   {
+    name: 'list_nfc_tags',
+    description:
+      'List registered NFC tags — location stickers (each mapped to a zone) and employee badges — set up for this workspace.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
     name: 'get_my_status',
     description: "Get the current user's attendance status today",
     inputSchema: { type: 'object', properties: {} },
@@ -91,6 +97,9 @@ async function runTool(name, args, ctx) {
   if (name === 'who_is_late') {
     const t = await db.attendanceToday(ctx.tenantId, args.cutoff_hour || 9);
     return { late: t.late, count: t.counts.late };
+  }
+  if (name === 'list_nfc_tags') {
+    return { tags: await db.listNfcTags(ctx.tenantId) };
   }
   if (name === 'get_my_status') {
     return await db.myStatus(ctx.tenantId, ctx.sub);

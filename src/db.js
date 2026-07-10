@@ -82,6 +82,69 @@ export async function deleteZone(tenantId, zoneId) {
   return { id: String(zoneId), deleted: true };
 }
 
+// ---- NFC tags: location stickers + employee badges ------------------------
+const nfcOut = (t) =>
+  t && {
+    id: String(t.id),
+    uid: t.uid,
+    kind: t.kind,
+    zoneId: t.zone_id == null ? null : String(t.zone_id),
+    employeeRef: t.employee_ref || null,
+    label: t.label || '',
+    active: t.active,
+  };
+
+export async function listNfcTags(tenantId) {
+  const rows = await q(
+    `select id, uid, kind, zone_id, employee_ref, label, active from nfc_tags
+      where tenant_id = $1 and active = true order by kind, label, uid`,
+    [tenantId],
+  );
+  return rows.map(nfcOut);
+}
+
+// Register (or re-point) a physical chip. Idempotent on (tenant, UID) so
+// re-scanning a known tag updates it in place instead of erroring.
+export async function registerNfcTag(
+  tenantId,
+  { uid, kind = 'location', zoneId = null, employeeRef = null, label = '' } = {},
+) {
+  const u = String(uid || '').trim();
+  if (!u) throw Object.assign(new Error('uid is required'), { status: 400 });
+  const k = kind === 'badge' ? 'badge' : 'location';
+  const rows = await q(
+    `insert into nfc_tags (tenant_id, uid, kind, zone_id, employee_ref, label, active, updated_at)
+     values ($1, $2, $3, $4, $5, $6, true, now())
+     on conflict (tenant_id, upper(uid)) do update
+       set kind = excluded.kind, zone_id = excluded.zone_id,
+           employee_ref = excluded.employee_ref, label = excluded.label,
+           active = true, updated_at = now()
+     returning id, uid, kind, zone_id, employee_ref, label, active`,
+    [
+      tenantId, u, k,
+      k === 'location' ? zoneId : null,
+      k === 'badge' ? String(employeeRef || '') : null,
+      String(label || '').slice(0, 120),
+    ],
+  );
+  return nfcOut(rows[0]);
+}
+
+export async function removeNfcTag(tenantId, id) {
+  await q(`update nfc_tags set active = false, updated_at = now() where tenant_id = $1 and id = $2`, [tenantId, id]);
+  return { id: String(id), deleted: true };
+}
+
+// Resolve a scanned UID to its registration (case-insensitive). null = unknown.
+export async function resolveNfcTag(tenantId, uid) {
+  const rows = await q(
+    `select id, uid, kind, zone_id, employee_ref, label, active from nfc_tags
+      where tenant_id = $1 and upper(uid) = upper($2) and active = true`,
+    [tenantId, String(uid || '')],
+  );
+  return nfcOut(rows[0]) || null;
+}
+
 // ---- events / check-in-out ------------------------------------------------
 export async function recordEvent(
   tenantId, employeeRef, type,

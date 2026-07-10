@@ -151,3 +151,28 @@ alter table memberships add column if not exists work_type_ids jsonb not null de
 
 -- The work type selected for a given presence event (null for check_out / legacy).
 alter table events add column if not exists work_type text;
+
+-- ===========================================================================
+-- v4: NFC-based attendance. Two models, one table:
+--   * LOCATION tag — a passive NFC sticker at an entrance/station. Staff tap it
+--     with their OWN phone → check-in at that tag's zone (source='nfc').
+--   * BADGE — an NFC card carried by an employee, tapped on a shared KIOSK
+--     device → check-in/out for that employee (buddy-punch-resistant: the badge
+--     is physical + the kiosk is manager/device-authed).
+-- Idempotent.
+-- ===========================================================================
+create table if not exists nfc_tags (
+    id            uuid primary key default gen_random_uuid(),
+    tenant_id     text not null,
+    uid           text not null,                 -- NFC chip UID (hex)
+    kind          text not null default 'location' check (kind in ('location', 'badge')),
+    zone_id       uuid references zones (id) on delete set null,   -- LOCATION tags
+    employee_ref  text,                          -- BADGE tags (the card's owner)
+    label         text not null default '',
+    active        boolean not null default true,
+    created_at    timestamptz not null default now(),
+    updated_at    timestamptz not null default now()
+);
+-- One registration per physical chip per tenant (case-insensitive UID).
+create unique index if not exists nfc_tags_uid_uidx on nfc_tags (tenant_id, upper(uid));
+create index if not exists nfc_tags_tenant_idx on nfc_tags (tenant_id, active);
