@@ -38,6 +38,15 @@ export async function verifyToken(authHeader, { surface } = {}) {
     surface: payload.surface || 'mcp',
     email: payload.email || '',
     role: payload.role || '',
+    // Eesa-owned attendance role authority. Minted server-side from the acting
+    // user's attendance positions; READ-ONLY and trusted, never taken from the
+    // client. 'admin' | 'staff' | '' (absent → not enrolled). Present on BOTH
+    // the UI-session token and the MCP tool-call service token.
+    appRole: payload.appRole || '',
+    // The acting user's stable ref on the MCP tool-call path (the SAME value the
+    // UI-session token uses for `sub`), so agent-path records line up with the
+    // user. Absent on the plain gateway service token (sub='gateway').
+    employeeRef: payload.employeeRef || '',
     raw: payload,
   };
 }

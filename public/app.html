@@ -282,20 +282,29 @@
       report: ['Report', 'chart'], zones: ['Zones', 'pin'], presence: ["Who's in", 'activity'],
       settings: ['Settings', 'sliders'], me: ['My attendance', 'user'], history: ['History', 'history'],
     };
-    const MANAGER_TABS = ['team', 'schedule', 'approvals', 'report', 'zones', 'presence', 'settings'];
+    // Two branches of one shell — the tab set is the only thing that differs.
+    const ADMIN_TABS = ['team', 'schedule', 'approvals', 'report', 'zones', 'presence', 'settings'];
     const STAFF_TABS = ['me', 'history'];
+    // How each Eesa-owned appRole reads in the header.
+    const ROLE_LABEL = { admin: 'Admin', staff: 'Staff' };
 
     async function boot() {
       try {
         CTX = await api('/api/ui/context');
+        // appRole (Eesa authority) is what we branch on: 'admin' | 'staff' | null.
+        // Older builds only sent `role` ('manager'|'staff'|null); fall back to it
+        // so a mixed deploy still resolves.
+        const appRole = CTX.appRole || (CTX.role === 'manager' ? 'admin' : CTX.role) || null;
         const nm = CTX.name || 'You';
-        $('who').innerHTML = `<div class="meta"><div class="nm">${esc(nm)}</div>${CTX.role ? `<div class="rl">${esc(CTX.role)}</div>` : ''}</div><div class="avatar">${esc(initials(nm))}</div>`;
-        if (!CTX.role) {
+        const label = ROLE_LABEL[appRole] || '';
+        $('who').innerHTML = `<div class="meta"><div class="nm">${esc(nm)}</div>${label ? `<div class="rl">${esc(label)}</div>` : ''}</div><div class="avatar">${esc(initials(nm))}</div>`;
+        if (!appRole) {
+          // Claim absent → not enrolled. Clean empty state, no nav.
           $('nav').innerHTML = '';
-          $('view').innerHTML = `<div class="card">${empty('inbox', 'You’re not enrolled in attendance yet. Ask your manager to add you to the team.')}</div>`;
+          $('view').innerHTML = `<div class="card">${empty('inbox', 'You’re not enrolled in attendance yet. Ask an admin to add you to the team.')}</div>`;
           return;
         }
-        const tabs = CTX.role === 'manager' ? MANAGER_TABS : STAFF_TABS;
+        const tabs = appRole === 'admin' ? ADMIN_TABS : STAFF_TABS;
         $('nav').innerHTML = tabs.map((k) => `<button data-tab="${k}">${ic(TABS[k][1])}<span>${TABS[k][0]}</span></button>`).join('');
         $('nav').querySelectorAll('button').forEach((b) => b.onclick = () => go(b.dataset.tab));
         go(tabs[0]);

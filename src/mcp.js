@@ -51,7 +51,43 @@ const TOOLS = [
     description: "Get the current user's attendance status today",
     inputSchema: { type: 'object', properties: {} },
   },
+  {
+    name: 'get_my_history',
+    description:
+      "Get the current user's own attendance history (per-day hours, first-in and last-out) for the last N days. Scoped to the caller only.",
+    inputSchema: {
+      type: 'object',
+      properties: { days: { type: 'integer', description: 'How many days back, default 7 (max 90).' } },
+    },
+  },
 ];
+
+// ---- Per-caller access (Eesa-owned "appRole" claim is the authority) --------
+// The agent path carries appRole ('admin' | 'staff') + employeeRef on the MCP
+// tool-call token. appRole decides which tools the caller may reach; the self
+// tools are additionally SCOPED to employeeRef so a staff caller only ever
+// touches their own records. A caller with no appRole gets nothing.
+const STAFF_TOOLS = new Set(['get_my_status', 'get_my_history']);
+const ADMIN_TOOLS = new Set([
+  'who_is_present', 'who_is_absent', 'attendance_summary', 'who_is_late',
+  'list_nfc_tags', 'get_my_status', 'get_my_history',
+]);
+const TOOL_NAMES = new Set(TOOLS.map((t) => t.name));
+
+function allowedToolsFor(ctx) {
+  const role = String((ctx && ctx.appRole) || '').toLowerCase();
+  if (role === 'admin') return ADMIN_TOOLS;
+  if (role === 'staff') return STAFF_TOOLS;
+  return new Set();
+}
+
+// The acting user's stable ref for self-scoped tools. Prefer the employeeRef
+// claim; fall back to a real sub, but never the sentinel gateway sub.
+function callerRef(ctx) {
+  if (ctx && ctx.employeeRef) return String(ctx.employeeRef);
+  if (ctx && ctx.sub && ctx.sub !== 'gateway') return String(ctx.sub);
+  return null;
+}
 
 export async function handleRpc(body, ctx, serverInfo) {
   const { method, params = {} } = body;
@@ -59,7 +95,11 @@ export async function handleRpc(body, ctx, serverInfo) {
     return { protocolVersion: PROTOCOL, capabilities: { tools: {} }, serverInfo };
   }
   if (method === 'notifications/initialized') return null;
-  if (method === 'tools/list') return { tools: TOOLS };
+  if (method === 'tools/list') {
+    // Only advertise the tools this caller's appRole may actually use.
+    const allowed = allowedToolsFor(ctx);
+    return { tools: TOOLS.filter((t) => allowed.has(t.name)) };
+  }
   if (method === 'tools/call') {
     const name = params.name;
     const args = params.arguments || {};
@@ -78,11 +118,29 @@ export async function handleRpc(body, ctx, serverInfo) {
 }
 
 async function runTool(name, args, ctx) {
-  if (name === 'mark_attendance') {
-    const type = args.status === 'absent' ? 'check_out' : 'check_in';
-    const ev = await db.recordEvent(ctx.tenantId, ctx.sub, type, {});
-    return { marked: args.status, at: ev.at };
+  // Unknown tool → JSON-RPC method-not-found (distinct from a permission denial).
+  if (!TOOL_NAMES.has(name)) {
+    const err = new Error('Unknown tool: ' + name);
+    err.code = -32601;
+    throw err;
   }
+  // Per-caller gating: the appRole claim decides the tool set. Anything the
+  // caller's role can't reach (including a caller with no appRole at all) is a
+  // clear, non-leaky permission error rather than a silent failure.
+  const allowed = allowedToolsFor(ctx);
+  if (!allowed.has(name)) {
+    throw new Error(`Tool "${name}" is not permitted for your role.`);
+  }
+
+  // ---- staff + admin: self-scoped reads (their OWN records via employeeRef) --
+  if (name === 'get_my_status' || name === 'get_my_history') {
+    const me = callerRef(ctx);
+    if (!me) throw new Error('Cannot resolve your identity for this request.');
+    if (name === 'get_my_status') return await db.myStatus(ctx.tenantId, me);
+    return await db.myHistory(ctx.tenantId, me, Number(args.days) || 7);
+  }
+
+  // ---- admin only: tenant-wide reads ----------------------------------------
   if (name === 'who_is_present') {
     const t = await db.attendanceToday(ctx.tenantId);
     return { present: t.present, count: t.counts.present };
@@ -101,10 +159,9 @@ async function runTool(name, args, ctx) {
   if (name === 'list_nfc_tags') {
     return { tags: await db.listNfcTags(ctx.tenantId) };
   }
-  if (name === 'get_my_status') {
-    return await db.myStatus(ctx.tenantId, ctx.sub);
-  }
-  const err = new Error('Unknown tool: ' + name);
-  err.code = -32601;
-  throw err;
+
+  // Safety net: a tool that is defined and in an allowed set but has no handler
+  // here (e.g. mark_attendance, which is intentionally kept out of every allowed
+  // set so it never reaches this point — writes go through the REST hot path).
+  throw new Error(`Tool "${name}" is not available on the agent surface.`);
 }
