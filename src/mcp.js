@@ -96,9 +96,14 @@ export async function handleRpc(body, ctx, serverInfo) {
   }
   if (method === 'notifications/initialized') return null;
   if (method === 'tools/list') {
-    // Only advertise the tools this caller's appRole may actually use.
-    const allowed = allowedToolsFor(ctx);
-    return { tools: TOOLS.filter((t) => allowed.has(t.name)) };
+    // A real per-user call (appRole present) is shown only its role's tools.
+    // The gateway/catalog-sync call carries NO appRole — it must see the FULL
+    // agent-visible read surface (ADMIN_TOOLS), otherwise the platform's
+    // tool-sync would discover zero tools and deactivate the whole plugin.
+    // mark_attendance is in no set, so it never appears (agent write-safety).
+    // runTool remains the hard per-caller gate regardless of what is listed.
+    const visible = ctx && ctx.appRole ? allowedToolsFor(ctx) : ADMIN_TOOLS;
+    return { tools: TOOLS.filter((t) => visible.has(t.name)) };
   }
   if (method === 'tools/call') {
     const name = params.name;
