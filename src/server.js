@@ -287,8 +287,57 @@ app.post('/api/admin/manual-entry', manager, async (req, res) => {
 });
 
 // EOD report — per-employee hours + approved pay (the QuickBooks export basis).
-app.get('/api/admin/report', manager, async (req, res) =>
-  res.json({ ok: true, data: await db.report(req.ctx.tenantId, { from: req.query.from || null, to: req.query.to || null }) }));
+// Every employee — including admins and anyone with no attendance yet — with
+// their totals for the window. The raw report only covers people who already
+// have day_summaries or a schedule, and carries whatever name the membership
+// row happens to hold (usually blank), so merge the tenant roster over it the
+// same way /admin/members does. Without this the report was a list of bare
+// employeeRef numbers with everyone quiet simply missing.
+app.get('/api/admin/report', manager, async (req, res) => {
+  const tenantId = req.ctx.tenantId;
+  const from = req.query.from || null;
+  const to = req.query.to || null;
+  const [rows, roster] = await Promise.all([
+    db.report(tenantId, { from, to }),
+    fetchRoster(tenantId).catch(() => []),
+  ]);
+  const byRef = new Map(rows.map((r) => [String(r.employeeRef), r]));
+  const named = roster.map((u) => {
+    const r = byRef.get(String(u.id));
+    byRef.delete(String(u.id));
+    return {
+      ...(r || {
+        employeeRef: String(u.id), days: 0, totalMinutes: 0, approvedMinutes: 0,
+        expectedMinutes: 0, hasSchedule: false, differenceMinutes: 0,
+        payRate: null, approvedPay: null,
+      }),
+      name: u.name || (r && r.name) || '',
+      email: u.email || '',
+    };
+  });
+  // Anyone with attendance who is no longer on the roster still has to appear.
+  const orphans = [...byRef.values()];
+  const data = [...named, ...orphans].sort((a, b) =>
+    String(a.name || a.employeeRef).localeCompare(String(b.name || b.employeeRef)));
+  res.json({ ok: true, data });
+});
+
+// One person's attendance in detail — every day in the window plus a monthly
+// rollup — so an admin can click a name in the report and see how the total was
+// made up. Manager-gated: staff read their own via /getMyHistory.
+app.get('/api/admin/employee-report', manager, async (req, res) => {
+  const employeeRef = String(req.query.employeeRef || '').trim();
+  if (!employeeRef) return res.status(400).json({ ok: false, error: 'employeeRef required' });
+  const tenantId = req.ctx.tenantId;
+  const [detail, roster] = await Promise.all([
+    db.employeeDetail(tenantId, employeeRef, {
+      from: req.query.from || null, to: req.query.to || null,
+    }),
+    fetchRoster(tenantId).catch(() => []),
+  ]);
+  const who = roster.find((u) => String(u.id) === employeeRef);
+  res.json({ ok: true, data: { ...detail, name: (who && who.name) || '', email: (who && who.email) || '' } });
+});
 
 // Optional per-person, per-day schedule (expected hours) → Actual vs Expected.
 app.get('/api/admin/schedules', manager, async (req, res) =>

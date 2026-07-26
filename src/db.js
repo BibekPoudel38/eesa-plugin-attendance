@@ -253,6 +253,48 @@ export async function myHistory(tenantId, employeeRef, days = 7) {
   };
 }
 
+/// One employee's attendance in detail: every day in the window plus a monthly
+/// rollup, for the admin report's per-person drill-down. Same data `myHistory`
+/// gives a staff member about themselves — the caller (server.js) is what
+/// restricts this to managers.
+export async function employeeDetail(tenantId, employeeRef, { from = null, to = null } = {}) {
+  const f = from || '1970-01-01';
+  const t = to || '2999-12-31';
+  const rows = await q(
+    `select day, first_in, last_out, total_minutes, approval_status
+       from day_summaries
+      where tenant_id = $1 and employee_ref = $2 and day between $3 and $4
+      order by day desc`,
+    [tenantId, employeeRef, f, t],
+  );
+  const days = rows.map((r) => ({
+    date: dayStr(r.day),
+    totalMinutes: Number(r.total_minutes || 0),
+    firstIn: iso(r.first_in),
+    lastOut: iso(r.last_out),
+    approvalStatus: r.approval_status || null,
+    status: r.last_out ? 'complete' : r.first_in ? 'incomplete' : 'open',
+  }));
+  // Roll the same rows up by calendar month, so the UI never has to re-derive
+  // it (and can't disagree with the day list it is showing).
+  const byMonth = new Map();
+  for (const d of days) {
+    const key = d.date.slice(0, 7); // YYYY-MM
+    const cur = byMonth.get(key) || { month: key, totalMinutes: 0, daysWorked: 0 };
+    cur.totalMinutes += d.totalMinutes;
+    if (d.totalMinutes > 0) cur.daysWorked += 1;
+    byMonth.set(key, cur);
+  }
+  const months = [...byMonth.values()].sort((a, b) => (a.month < b.month ? 1 : -1));
+  return {
+    employeeRef: String(employeeRef),
+    days,
+    months,
+    totalMinutes: days.reduce((n, d) => n + d.totalMinutes, 0),
+    daysWorked: days.filter((d) => d.totalMinutes > 0).length,
+  };
+}
+
 export async function whoIsLate(tenantId, cutoffHour = 9) {
   const tz = await tenantTz(tenantId);
   const rows = await q(

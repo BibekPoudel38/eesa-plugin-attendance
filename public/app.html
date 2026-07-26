@@ -281,9 +281,10 @@
       team: ['Team', 'users'], schedule: ['Schedule', 'calendar'], approvals: ['Approvals', 'checkCircle'],
       report: ['Report', 'chart'], zones: ['Zones', 'pin'], presence: ["Who's in", 'activity'],
       settings: ['Settings', 'sliders'], me: ['My attendance', 'user'], history: ['History', 'history'],
+      logs: ['Logs', 'history'],
     };
     // Two branches of one shell — the tab set is the only thing that differs.
-    const ADMIN_TABS = ['team', 'schedule', 'approvals', 'report', 'zones', 'presence', 'settings'];
+    const ADMIN_TABS = ['team', 'logs', 'schedule', 'approvals', 'report', 'zones', 'presence', 'settings'];
     const STAFF_TABS = ['me', 'history'];
     // How each Eesa-owned appRole reads in the header.
     const ROLE_LABEL = { admin: 'Admin', staff: 'Staff' };
@@ -548,6 +549,70 @@
         catch (e) { toast(e.message, true); }
       };
       load();
+    };
+
+    // Logs — everyone's month at a glance, and one tap into how a total was
+    // made up. The Report tab answers "what do I owe"; this answers "when was
+    // this person actually here", which is the question an admin asks when a
+    // total looks wrong.
+    VIEWS.logs = async () => {
+      const now = new Date();
+      const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      $('view').innerHTML = `<div class="card">
+        <h2>${ic('history')} Logs</h2>
+        <div class="row" style="margin-bottom:12px">
+          <label class="field">Month<input type="month" id="lm" value="${thisMonth}"></label>
+          <button class="btn primary" id="lg" style="align-self:flex-end">Show</button></div>
+        <div id="lout" class="muted">Loading…</div></div>
+        <div id="ldetail"></div>`;
+
+      const monthRange = (m) => {
+        const [y, mo] = m.split('-').map(Number);
+        const from = `${m}-01`;
+        const to = new Date(y, mo, 0).toISOString().slice(0, 10); // last day of month
+        return { from, to };
+      };
+
+      const openPerson = async (ref, name) => {
+        const { from, to } = monthRange($('lm').value);
+        $('ldetail').innerHTML = `<div class="card"><div class="muted">Loading ${esc(name || ref)}…</div></div>`;
+        const q = new URLSearchParams({ employeeRef: ref, from, to });
+        const d = await api('/api/admin/employee-report?' + q);
+        const rows = (d.days || []).filter((x) => x.firstIn || x.totalMinutes > 0);
+        $('ldetail').innerHTML = `<div class="card">
+          <h2>${ic('user')} ${esc(d.name || name || ref)}</h2>
+          <div class="muted" style="margin-bottom:10px">${esc($('lm').value)} · <strong>${hrs(d.totalMinutes)}</strong> across ${d.daysWorked} day${d.daysWorked === 1 ? '' : 's'}</div>
+          ${rows.length ? `<table><thead><tr><th>Date</th><th>In</th><th>Out</th><th>Time</th></tr></thead><tbody>
+            ${rows.map((x) => `<tr>
+              <td>${esc(x.date)}</td>
+              <td>${x.firstIn ? timeOf(x.firstIn) : '<span class="muted">—</span>'}</td>
+              <td>${x.lastOut ? timeOf(x.lastOut) : `<span class="muted">${x.status === 'open' ? 'still in' : '—'}</span>`}</td>
+              <td class="num">${hrs(x.totalMinutes)}</td></tr>`).join('')}
+          </tbody></table>` : empty('inbox', 'No attendance recorded this month.')}
+        </div>`;
+        $('ldetail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      };
+
+      const run = async () => {
+        const { from, to } = monthRange($('lm').value);
+        $('ldetail').innerHTML = '';
+        const people = await api('/api/admin/report?' + new URLSearchParams({ from, to }));
+        $('lout').innerHTML = people.length ? `<table><thead><tr><th>Employee</th><th>Days</th><th>Total this month</th><th></th></tr></thead><tbody>
+          ${people.map((r, i) => `<tr>
+            <td>${esc(r.name || r.employeeRef)}</td>
+            <td class="num">${r.days}</td>
+            <td class="num"><strong>${hrs(r.totalMinutes)}</strong></td>
+            <td><button class="btn small" id="lv${i}">View logs</button></td></tr>`).join('')}
+        </tbody></table>` : empty('chart', 'Nobody on the roster yet.');
+        people.forEach((r, i) => {
+          const b = $('lv' + i);
+          if (b) b.onclick = () => openPerson(String(r.employeeRef), r.name).catch((e) => {
+            $('ldetail').innerHTML = `<div class="card"><div class="err">${esc(e.message || 'Could not load logs.')}</div></div>`;
+          });
+        });
+      };
+      $('lg').onclick = () => run().catch((e) => { $('lout').innerHTML = `<div class="err">${esc(e.message)}</div>`; });
+      await run();
     };
 
     VIEWS.report = async () => {
