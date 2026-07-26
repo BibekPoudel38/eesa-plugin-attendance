@@ -575,9 +575,13 @@
     // A person's whole year on its own page — months, and the days inside each.
     // Opened from the Logs list; "Back" returns to it rather than leaving the
     // detail stranded under a list the admin has to scroll past.
-    async function personLogs(ref, name, year) {
-      const yr = year || new Date().getFullYear();
+    async function personLogs(ref, name, year, month) {
+      const yr = Number(year) || new Date().getFullYear();
+      const mo = month === undefined ? '' : String(month); // '' = whole year
       $('view').innerHTML = `<div class="card"><div class="muted">Loading ${esc(name || ref)}…</div></div>`;
+      // Always fetch the whole year in one request, then narrow on the client —
+      // switching month is then instant and the year total stays available to
+      // show alongside it.
       const q = new URLSearchParams({ employeeRef: ref, from: `${yr}-01-01`, to: `${yr}-12-31` });
       const d = await api('/api/admin/employee-report?' + q);
       const worked = (d.days || []).filter((x) => x.firstIn || x.totalMinutes > 0);
@@ -587,22 +591,38 @@
         if (!byMonth.has(k)) byMonth.set(k, []);
         byMonth.get(k).push(x);
       }
-      const months = (d.months || []).filter((m) => byMonth.has(m.month));
+      const allMonths = (d.months || []).filter((m) => byMonth.has(m.month));
+      const shown = mo ? allMonths.filter((m) => m.month === `${yr}-${mo}`) : allMonths;
+      const sel = mo ? allMonths.find((m) => m.month === `${yr}-${mo}`) : null;
+
       const years = [];
       for (let y = new Date().getFullYear(); y >= new Date().getFullYear() - 3; y--) years.push(y);
+      const MONTHS = ['01','02','03','04','05','06','07','08','09','10','11','12'];
+      const monthLabel = (mm) => new Date(2000, Number(mm) - 1, 1).toLocaleDateString([], { month: 'long' });
+
+      const headline = mo
+        ? `${monthNice(`${yr}-${mo}`)} · <strong>${dur(sel ? sel.totalMinutes : 0)}</strong> across ${sel ? sel.daysWorked : 0} day${(sel && sel.daysWorked === 1) ? '' : 's'}`
+        : `${yr} · <strong>${dur(d.totalMinutes)}</strong> across ${d.daysWorked} day${d.daysWorked === 1 ? '' : 's'}`;
 
       $('view').innerHTML = `
         <div class="card">
-          <div class="row" style="align-items:center;justify-content:space-between;margin-bottom:6px">
+          <div class="row" style="align-items:flex-end;justify-content:space-between;gap:10px;margin-bottom:6px">
             <button class="btn small" id="lback">← Back to logs</button>
-            <label class="field" style="margin:0">Year
-              <select id="lyear">${years.map((y) => `<option value="${y}" ${y === Number(yr) ? 'selected' : ''}>${y}</option>`).join('')}</select>
-            </label>
+            <div class="row" style="gap:8px;margin:0">
+              <label class="field" style="margin:0">Month
+                <select id="lmonth">
+                  <option value="" ${mo ? '' : 'selected'}>All months</option>
+                  ${MONTHS.map((mm) => `<option value="${mm}" ${mm === mo ? 'selected' : ''}>${monthLabel(mm)}</option>`).join('')}
+                </select></label>
+              <label class="field" style="margin:0">Year
+                <select id="lyear">${years.map((y) => `<option value="${y}" ${y === yr ? 'selected' : ''}>${y}</option>`).join('')}</select>
+              </label>
+            </div>
           </div>
           <h2>${ic('user')} ${esc(d.name || name || ref)}</h2>
-          <div class="muted">${yr} · <strong>${dur(d.totalMinutes)}</strong> across ${d.daysWorked} day${d.daysWorked === 1 ? '' : 's'}</div>
+          <div class="muted">${headline}${mo ? ` <span style="opacity:.7">· ${yr} total ${dur(d.totalMinutes)}</span>` : ''}</div>
         </div>
-        ${months.length ? months.map((m) => `
+        ${shown.length ? shown.map((m) => `
           <div class="card">
             <h2 style="font-size:1rem">${ic('calendar')} ${esc(monthNice(m.month))}
               <span class="muted" style="font-weight:400"> · ${dur(m.totalMinutes)} · ${m.daysWorked} day${m.daysWorked === 1 ? '' : 's'}</span></h2>
@@ -613,12 +633,14 @@
                 <td>${x.lastOut ? timeOf(x.lastOut) : `<span class="muted">${x.status === 'open' ? 'still in' : '—'}</span>`}</td>
                 <td class="num">${dur(x.totalMinutes)}</td></tr>`).join('')}
             </tbody></table>
-          </div>`).join('') : `<div class="card">${empty('inbox', `No attendance recorded in ${yr}.`)}</div>`}`;
+          </div>`).join('') : `<div class="card">${empty('inbox', mo ? `Nothing recorded in ${monthNice(`${yr}-${mo}`)}.` : `No attendance recorded in ${yr}.`)}</div>`}`;
 
-      $('lback').onclick = () => go('logs');
-      $('lyear').onchange = (e) => personLogs(ref, name, e.target.value).catch((err) => {
+      const reload = (y, m) => personLogs(ref, name, y, m).catch((err) => {
         $('view').innerHTML = `<div class="card"><div class="err">${esc(err.message || 'Could not load logs.')}</div></div>`;
       });
+      $('lback').onclick = () => go('logs');
+      $('lyear').onchange = (e) => reload(e.target.value, $('lmonth').value);
+      $('lmonth').onchange = (e) => reload($('lyear').value, e.target.value);
       window.scrollTo({ top: 0 });
     }
 
