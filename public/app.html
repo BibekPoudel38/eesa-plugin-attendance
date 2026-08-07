@@ -205,6 +205,27 @@
     .zpin { width:16px; height:16px; box-sizing:border-box; border-radius:50%; background:var(--primary); border:2px solid #fff; box-shadow:0 0 0 1px var(--primary); cursor:grab; }
     .zhandle { width:14px; height:14px; box-sizing:border-box; border-radius:50%; background:#fff; border:2px solid var(--primary); cursor:ew-resize; }
     .map-hint { font-size:.74rem; color:var(--muted); margin:-2px 0 10px; }
+    /* A person's last-known position on the zone map. Green = still checked in,
+       grey = checked out, so "who is here now" reads at a glance. */
+    .ppin { width:14px; height:14px; box-sizing:border-box; border-radius:50%; background:var(--muted); border:2px solid #fff; box-shadow:0 0 0 1.5px rgba(0,0,0,.25); }
+    .ppin.in { background:var(--success); }
+    .legend { display:flex; flex-wrap:wrap; gap:12px; align-items:center; font-size:.74rem; color:var(--muted); margin:-2px 0 10px; }
+    .legend .k { display:inline-flex; align-items:center; gap:5px; }
+    .legend .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+
+    /* Toolbars (search + filters above a table) */
+    .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+    .toolbar input[type="search"], .toolbar input.search { flex:1; min-width:180px; }
+    .toolbar select { width:auto; min-width:120px; }
+    .count { font-size:.74rem; color:var(--muted); margin-left:auto; white-space:nowrap; }
+
+    /* Event drill-down under a day row */
+    .evt { display:flex; gap:10px; align-items:flex-start; padding:8px 0 8px 10px; border-left:2px solid var(--line); margin-left:6px; font-size:.8rem; }
+    .evt .t { font-variant-numeric:tabular-nums; font-weight:650; width:62px; flex:none; }
+    .evt .g { flex:1; min-width:0; }
+    .tag { display:inline-block; padding:1px 7px; border-radius:999px; background:var(--card-2); border:1px solid var(--line); font-size:.68rem; color:var(--muted); margin-left:6px; }
+    a.maplink { color:var(--primary); text-decoration:none; font-weight:600; }
+    a.maplink:hover { text-decoration:underline; }
     /* Per-user job-type picks */
     .wtwrap { display:flex; flex-wrap:wrap; gap:8px 16px; }
     .wtchk { display:inline-flex; align-items:center; gap:6px; font-size:.82rem; white-space:nowrap; }
@@ -243,6 +264,59 @@
     const today = () => new Date().toISOString().slice(0, 10);
     const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
     const initials = (s) => (String(s || '?').trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join('') || '?').toUpperCase();
+    const metres = (m) => (m == null ? '' : m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`);
+    const osm = (lat, lng) => `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=18/${lat}/${lng}`;
+
+    // ---- Verification badges --------------------------------------------------
+    // Whether a punch's location could be confirmed against its zone. This is a
+    // MARKER, never a filter: unverified attendance is always shown, because it
+    // is usually honest (no GPS indoors, an admin correction) and hiding it would
+    // just look like lost time to the person who worked it.
+    const VERIFY = {
+      verified:   { label: 'Verified',   cls: 'approved', hint: 'Location confirmed inside the work zone.' },
+      partial:    { label: 'Partly verified', cls: 'pending', hint: 'Some punches this day had no location to check.' },
+      unverified: { label: 'Unverified', cls: 'pending', hint: 'No location was recorded, so the system could not confirm it. The record still counts.' },
+      outside:    { label: 'Outside zone', cls: 'rejected', hint: 'Recorded outside the work zone.' },
+    };
+    const vbadge = (state, reason) => {
+      const v = VERIFY[state];
+      if (!v) return '';
+      return `<span class="pill ${v.cls}" title="${esc(reason || v.hint)}">${esc(v.label)}</span>`;
+    };
+
+    // "Main Office · 34 m from centre (±8 m) · map" — where a punch happened,
+    // always paired with a link so the admin can see it for themselves.
+    const whereText = (loc) => {
+      if (!loc) return '<span class="muted">No location</span>';
+      const bits = [];
+      if (loc.zoneName) bits.push(esc(loc.zoneName));
+      if (loc.distanceM != null) bits.push(`${metres(loc.distanceM)} from centre`);
+      if (loc.accuracyM != null) bits.push(`±${metres(loc.accuracyM)}`);
+      const link = `<a class="maplink" target="_blank" rel="noopener" href="${osm(loc.lat, loc.lng)}">map</a>`;
+      return `${bits.join(' · ') || `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}`} · ${link}`;
+    };
+
+    // How a punch got recorded, in words the admin didn't have to learn.
+    const SOURCE_LABEL = {
+      geofence: 'Automatic (arrived/left zone)', banner: 'Tapped in the app',
+      prompt: 'Answered the notification', manual: 'Logged by an admin', nfc: 'NFC tag',
+    };
+
+    // One punch as a timeline row: when, what, where, how it was recorded, and
+    // whether the location checks out.
+    const eventHtml = (e) => {
+      const kind = e.type === 'check_in'
+        ? (e.forWork === false ? 'On site — not for work' : 'Checked in')
+        : 'Checked out';
+      return `<div class="evt">
+        <div class="t">${esc(timeOf(e.at))}</div>
+        <div class="g">
+          <div style="font-weight:650">${esc(kind)}${e.workType ? `<span class="tag">${esc(e.workType)}</span>` : ''} ${vbadge(e.verification, e.verificationReason)}</div>
+          <div class="muted" style="font-size:.76rem;margin-top:3px">${whereText(e.location)}</div>
+          <div class="muted" style="font-size:.72rem;margin-top:1px">${esc(SOURCE_LABEL[e.source] || e.source)}</div>
+        </div>
+      </div>`;
+    };
 
     // ---- inline icon set (stroke, currentColor) ----
     const ICONS = {
@@ -345,13 +419,15 @@
       try { zones = await api('/api/getMyZones'); } catch (_) { zones = []; }
       const on = !!(st && st.checkedIn);
       const t = (st && st.today) || null;
+      const evs = (st && st.events) || [];
+      const where = on && st.zoneName ? ` at ${st.zoneName}` : '';
       $('view').innerHTML = `
         <div class="hero ${on ? 'hero--on' : ''}">
           <div class="hero__top">
             <div class="hero__badge">${ic(on ? 'check' : 'clock')}</div>
             <div>
               <div class="hero__state">${on ? 'Checked in' : 'Not checked in'}${on ? '<span class="pulse"></span>' : ''}</div>
-              <div class="hero__sub">${on && st.since ? 'On the clock since ' + timeOf(st.since) : 'You’re currently off the clock'}</div>
+              <div class="hero__sub">${on && st.since ? `On the clock${esc(where)} since ${timeOf(st.since)}` : 'You’re currently off the clock'}</div>
             </div>
           </div>
           <div class="stats">
@@ -359,6 +435,11 @@
             <div class="stat"><div class="stat__num num">${t ? timeOf(t.firstIn) : '—'}</div><div class="stat__lbl">First in</div></div>
             <div class="stat"><div class="stat__num num">${t && t.lastOut ? timeOf(t.lastOut) : '—'}</div><div class="stat__lbl">Last out</div></div>
           </div>
+        </div>
+        <div class="card">
+          <h2>${ic('history')} Today’s punches</h2>
+          ${evs.length ? evs.map(eventHtml).join('') : empty('history', 'Nothing recorded yet today.')}
+          ${evs.some((e) => e.verification !== 'verified') ? `<p class="muted" style="font-size:.76rem;margin:12px 0 0">${esc(VERIFY.unverified.hint)}</p>` : ''}
         </div>
         <div class="card">
           <h2>${ic('pin')} Your work zones</h2>
@@ -385,18 +466,41 @@
         <div class="card">
           <h2>${ic('history')} Last 30 days</h2>
           ${rows.length ? rows.map((r) => `
-            <div class="rowitem">
+            <div class="rowitem" data-hday="${esc(r.date)}" style="cursor:pointer">
               <div class="lead-ic">${ic('calendar')}</div>
               <div class="grow">
                 <div style="font-weight:650">${esc(dateNice(r.date))}</div>
                 <div class="muted" style="font-size:.78rem">${timeOf(r.firstIn)} → ${r.lastOut ? timeOf(r.lastOut) : 'open'}</div>
+                <div style="margin-top:4px">${vbadge(r.verification)}</div>
               </div>
               <div style="text-align:right">
                 <div class="num" style="font-weight:700">${hrs(r.totalMinutes)} h</div>
                 ${r.status ? `<span class="pill ${esc(r.status)}">${esc(r.status)}</span>` : ''}
               </div>
-            </div>`).join('') : empty('history', 'No attendance recorded yet. Your days will appear here once you start checking in.')}
+            </div>
+            <div id="hev-${esc(r.date)}" style="display:none;padding:0 4px 10px"></div>`).join('') : empty('history', 'No attendance recorded yet. Your days will appear here once you start checking in.')}
+          ${rows.some((r) => r.verification !== 'verified') ? `<p class="muted" style="font-size:.76rem;margin:12px 0 0">Days marked <em>Unverified</em> are still yours and still count — it only means the app couldn’t confirm the location at the time (no GPS signal, or the entry was logged by an admin). Tap a day to see each punch.</p>` : ''}
         </div>`;
+      // Tap a day to see the punches behind it, including any the system could
+      // not verify — those are exactly the ones a person needs to be able to
+      // look at and explain.
+      $('view').querySelectorAll('[data-hday]').forEach((el) => {
+        el.onclick = async () => {
+          const day = el.dataset.hday;
+          const box = $('hev-' + day);
+          if (!box) return;
+          if (box.style.display !== 'none') { box.style.display = 'none'; return; }
+          box.style.display = '';
+          box.innerHTML = '<span class="muted" style="font-size:.8rem">Loading…</span>';
+          try {
+            const evs = await api('/api/getMyEvents?' + new URLSearchParams({ from: day, to: day }));
+            box.innerHTML = evs.length ? evs.slice().reverse().map(eventHtml).join('')
+              : '<span class="muted" style="font-size:.8rem">No individual punches recorded for this day.</span>';
+          } catch (e) {
+            box.innerHTML = `<span class="err" style="font-size:.8rem">${esc(e.message)}</span>`;
+          }
+        };
+      });
     };
 
     // ==================== MANAGER ====================
@@ -414,13 +518,33 @@
       $('view').innerHTML = banner + `<div class="card">
         <h2>${ic('users')} Team &amp; roles</h2>
         <p class="lead">Assign a role to everyone who needs attendance. No role = no access. Set an hourly pay rate for the report &amp; QuickBooks.</p>
-        ${rows.length ? `<table><thead><tr><th>Name</th><th>Role</th><th>Pay/hr</th><th></th></tr></thead><tbody>
-        ${rows.map((u, i) => {
-          const ids = u.workTypeIds || [];
-          const jobs = catalog.length
-            ? catalog.map((w) => `<label class="wtchk"><input type="checkbox" data-wt="${i}" value="${esc(w.id)}" ${ids.includes(w.id) ? 'checked' : ''}> ${esc(w.name)}</label>`).join('')
-            : '<span class="muted" style="font-size:.72rem">Add work types in Settings to assign them.</span>';
-          return `<tr>
+        ${rows.length ? `
+        <div class="toolbar">
+          <input class="search" id="tq" type="search" placeholder="Search name or email" autocomplete="off">
+          <select id="trole" title="Filter by role">
+            <option value="">All roles</option>
+            <option value="manager">Manager</option>
+            <option value="staff">Staff</option>
+            <option value="none">No role (no access)</option>
+          </select>
+          ${catalog.length ? `<select id="tjob" title="Filter by job type">
+            <option value="">All job types</option>
+            ${catalog.map((w) => `<option value="${esc(w.id)}">${esc(w.name)}</option>`).join('')}
+            <option value="__none">No job types assigned</option>
+          </select>` : ''}
+          <span class="count" id="tcount"></span>
+        </div>
+        <div id="tbody"></div>` : empty('users', 'No teammates found in your workspace roster.')}</div>`;
+      if (!rows.length) return;
+
+      // Row ids stay keyed to each person's index in the FULL list, so filtering
+      // only changes what is drawn — never which control belongs to whom.
+      const rowHtml = (u, i) => {
+        const ids = u.workTypeIds || [];
+        const jobs = catalog.length
+          ? catalog.map((w) => `<label class="wtchk"><input type="checkbox" data-wt="${i}" value="${esc(w.id)}" ${ids.includes(w.id) ? 'checked' : ''}> ${esc(w.name)}</label>`).join('')
+          : '<span class="muted" style="font-size:.72rem">Add work types in Settings to assign them.</span>';
+        return `<tr>
           <td><div style="font-weight:600">${esc(u.name || u.email || u.employeeRef)}</div><div class="muted" style="font-size:.74rem">${esc(u.email || '')}</div></td>
           <td><select id="r${i}">
             <option value="" ${!u.role ? 'selected' : ''}>None</option>
@@ -431,18 +555,54 @@
           <td><button class="btn small primary" id="s${i}">Save</button></td>
         </tr>
         <tr class="wtrow"><td colspan="4"><div class="muted" style="font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">Job types</div><div class="wtwrap">${jobs}</div></td></tr>`;
-        }).join('')}</tbody></table>` : empty('users', 'No teammates found in your workspace roster.')}</div>`;
-      rows.forEach((u, i) => {
+      };
+
+      const bind = (u, i) => {
         $('s' + i).onclick = async () => {
           const role = $('r' + i).value;
           const payRate = $('p' + i).value === '' ? null : Number($('p' + i).value);
           const workTypeIds = [...document.querySelectorAll('input[data-wt="' + i + '"]:checked')].map((c) => c.value);
           try {
-            if (!role) { await api('/api/admin/members/' + encodeURIComponent(u.employeeRef), { method: 'DELETE' }); toast('Removed'); }
-            else { await api('/api/admin/members', { method: 'POST', body: { employeeRef: u.employeeRef, role, payRate, name: u.name, email: u.email, workTypeIds } }); toast('Saved'); }
+            if (!role) { await api('/api/admin/members/' + encodeURIComponent(u.employeeRef), { method: 'DELETE' }); toast('Removed'); u.role = null; }
+            else {
+              await api('/api/admin/members', { method: 'POST', body: { employeeRef: u.employeeRef, role, payRate, name: u.name, email: u.email, workTypeIds } });
+              toast('Saved');
+              // Keep the in-memory row current so the filters agree with what
+              // was just saved without a reload.
+              u.role = role; u.payRate = payRate; u.workTypeIds = workTypeIds;
+            }
           } catch (e) { toast(e.message, true); }
         };
-      });
+      };
+
+      const render = () => {
+        const qy = ($('tq').value || '').trim().toLowerCase();
+        const role = $('trole').value;
+        const job = $('tjob') ? $('tjob').value : '';
+        const matches = rows
+          .map((u, i) => [u, i])
+          .filter(([u]) => {
+            if (qy && !`${u.name || ''} ${u.email || ''} ${u.employeeRef}`.toLowerCase().includes(qy)) return false;
+            if (role === 'none' ? !!u.role : role && u.role !== role) return false;
+            if (job) {
+              const ids = u.workTypeIds || [];
+              if (job === '__none' ? ids.length > 0 : !ids.includes(job)) return false;
+            }
+            return true;
+          });
+        $('tcount').textContent = matches.length === rows.length
+          ? `${rows.length} ${rows.length === 1 ? 'person' : 'people'}`
+          : `${matches.length} of ${rows.length}`;
+        $('tbody').innerHTML = matches.length
+          ? `<table><thead><tr><th>Name</th><th>Role</th><th>Pay/hr</th><th></th></tr></thead><tbody>${matches.map(([u, i]) => rowHtml(u, i)).join('')}</tbody></table>`
+          : empty('users', 'Nobody matches those filters.');
+        matches.forEach(([u, i]) => bind(u, i));
+      };
+
+      $('tq').oninput = render;
+      $('trole').onchange = render;
+      if ($('tjob')) $('tjob').onchange = render;
+      render();
     };
 
     VIEWS.schedule = async () => {
@@ -537,10 +697,11 @@
       const load = async () => {
         const q = new URLSearchParams({ from: $('af').value, to: $('at').value, ...($('as').value ? { status: $('as').value } : {}) });
         const rows = await api('/api/admin/approvals?' + q);
-        $('alist').innerHTML = rows.length ? `<table><thead><tr><th>Name</th><th>Day</th><th>In</th><th>Out</th><th>Actual</th><th>Exp.</th><th>Status</th><th></th></tr></thead><tbody>
+        $('alist').innerHTML = rows.length ? `<table><thead><tr><th>Name</th><th>Day</th><th>In</th><th>Out</th><th>Actual</th><th>Exp.</th><th>Location</th><th>Status</th><th></th></tr></thead><tbody>
           ${rows.map((r) => `<tr>
             <td>${esc(r.name || r.employeeRef)}</td><td>${esc(dateNice(r.day))}</td><td class="num">${timeOf(r.firstIn)}</td><td class="num">${timeOf(r.lastOut)}</td><td class="num">${hrs(r.totalMinutes)}</td>
             <td class="num">${r.expectedMinutes == null ? '<span class="muted">—</span>' : hrs(r.expectedMinutes)}</td>
+            <td>${vbadge(r.verification)}</td>
             <td><span class="pill ${esc(r.approvalStatus)}">${esc(r.approvalStatus)}</span></td>
             <td style="white-space:nowrap"><button class="btn link" data-a="approved" data-e="${esc(r.employeeRef)}" data-d="${r.day}">Approve</button>
                 <button class="btn link" style="color:var(--danger)" data-a="rejected" data-e="${esc(r.employeeRef)}" data-d="${r.day}">Reject</button></td>
@@ -626,14 +787,41 @@
           <div class="card">
             <h2 style="font-size:1rem">${ic('calendar')} ${esc(monthNice(m.month))}
               <span class="muted" style="font-weight:400"> · ${dur(m.totalMinutes)} · ${m.daysWorked} day${m.daysWorked === 1 ? '' : 's'}</span></h2>
-            <table><thead><tr><th>Date</th><th>First in</th><th>Last out</th><th>Worked</th></tr></thead><tbody>
+            <table><thead><tr><th>Date</th><th>First in</th><th>Last out</th><th>Worked</th><th>Location</th><th></th></tr></thead><tbody>
               ${byMonth.get(m.month).map((x) => `<tr>
                 <td>${esc(dateNice(x.date))}</td>
                 <td>${x.firstIn ? timeOf(x.firstIn) : '<span class="muted">—</span>'}</td>
                 <td>${x.lastOut ? timeOf(x.lastOut) : `<span class="muted">${x.status === 'open' ? 'still in' : '—'}</span>`}</td>
-                <td class="num">${dur(x.totalMinutes)}</td></tr>`).join('')}
+                <td class="num">${dur(x.totalMinutes)}</td>
+                <td>${vbadge(x.verification)}</td>
+                <td><button class="btn link" data-day="${esc(x.date)}">Where?</button></td></tr>
+                <tr class="wtrow" id="ev-${esc(x.date)}" style="display:none"><td colspan="6"></td></tr>`).join('')}
             </tbody></table>
           </div>`).join('') : `<div class="card">${empty('inbox', mo ? `Nothing recorded in ${monthNice(`${yr}-${mo}`)}.` : `No attendance recorded in ${yr}.`)}</div>`}`;
+
+      // Each day expands into its individual punches: when, how it was recorded,
+      // where, and whether that location checks out. Fetched on demand — a
+      // year's worth of raw events up front would be a lot of rows nobody asked
+      // for.
+      $('view').querySelectorAll('button[data-day]').forEach((b) => {
+        b.onclick = async () => {
+          const day = b.dataset.day;
+          const row = $('ev-' + day);
+          if (!row) return;
+          if (row.style.display !== 'none') { row.style.display = 'none'; b.textContent = 'Where?'; return; }
+          row.style.display = '';
+          b.textContent = 'Hide';
+          const cell = row.firstElementChild;
+          cell.innerHTML = '<span class="muted" style="font-size:.8rem">Loading…</span>';
+          try {
+            const evs = await api('/api/admin/events?' + new URLSearchParams({ employeeRef: ref, from: day, to: day }));
+            cell.innerHTML = evs.length ? evs.slice().reverse().map(eventHtml).join('')
+              : '<span class="muted" style="font-size:.8rem">No individual punches recorded for this day.</span>';
+          } catch (e) {
+            cell.innerHTML = `<span class="err" style="font-size:.8rem">${esc(e.message)}</span>`;
+          }
+        };
+      });
 
       const reload = (y, m) => personLogs(ref, name, y, m).catch((err) => {
         $('view').innerHTML = `<div class="card"><div class="err">${esc(err.message || 'Could not load logs.')}</div></div>`;
@@ -701,16 +889,39 @@
     };
 
     VIEWS.zones = async () => {
-      const zones = await api('/api/admin/zones');
+      const [zones, presence] = await Promise.all([
+        api('/api/admin/zones'),
+        // Best-effort: the map still works if presence can't be read.
+        api('/api/admin/presence').catch(() => ({ employees: [] })),
+      ]);
+      // Only people we actually have a position for can go on the map.
+      const people = (presence.employees || []).filter((p) => p.lastLocation);
       const hasMap = typeof window.L !== 'undefined';
-      $('view').innerHTML = `<div class="card"><h2>${ic('pin')} Work zones</h2>
-        <div id="zlist">${zones.length ? `<table><thead><tr><th>Name</th><th>Radius</th><th>Location</th><th></th></tr></thead><tbody>
-          ${zones.map((z) => `<tr><td style="font-weight:600">${esc(z.name)}</td><td class="num">${Math.round(z.radiusM)} m</td><td class="muted num">${z.lat.toFixed(4)}, ${z.lng.toFixed(4)}</td>
-          <td><button class="btn link" style="color:var(--danger)" data-z="${esc(z.id)}">Remove</button></td></tr>`).join('')}</tbody></table>` : empty('pin', 'No zones yet — add your first below.')}</div></div>
+      const inNow = people.filter((p) => p.checkedIn).length;
+      $('view').innerHTML = `
+        ${hasMap ? `<div class="card"><h2>${ic('pin')} Zone map</h2>
+          <div id="zmap"></div>
+          <div class="legend">
+            <span class="k"><span class="dot" style="background:var(--success)"></span> On the clock (${inNow})</span>
+            <span class="k"><span class="dot" style="background:var(--muted)"></span> Checked out</span>
+            <span class="k"><span class="dot" style="background:transparent;border:2px solid #8aa0a8"></span> Work zone</span>
+            <label class="k" style="cursor:pointer"><input type="checkbox" id="zshow" checked style="width:auto"> Show people</label>
+          </div>
+          <div class="map-hint">Each dot is where that person was when they <em>last punched</em> — the phone reports on arrival and departure, not continuously, so the time on the label is when the position was taken. Tap the map to drop a new zone, drag the teal dot to move it, drag the small white handle to resize.</div>
+          ${people.length === 0 ? `<div class="muted" style="font-size:.78rem">Nobody has punched with a location today, so there is nobody to place on the map yet.</div>` : ''}
+        </div>` : ''}
+        <div class="card"><h2>${ic('pin')} Work zones</h2>
+        <div id="zlist">${zones.length ? `<table><thead><tr><th>Name</th><th>Radius</th><th>Location</th><th>Here now</th><th></th></tr></thead><tbody>
+          ${zones.map((z) => {
+            const here = people.filter((p) => p.checkedIn && p.lastLocation && p.lastLocation.zoneId === z.id);
+            return `<tr><td style="font-weight:600">${esc(z.name)}</td><td class="num">${Math.round(z.radiusM)} m</td><td class="muted num">${z.lat.toFixed(4)}, ${z.lng.toFixed(4)}</td>
+            <td>${here.length ? `<span class="pill complete">${here.length}</span> <span class="muted" style="font-size:.74rem">${esc(here.map((p) => p.name || p.employeeRef).join(', '))}</span>` : '<span class="muted">—</span>'}</td>
+            <td><button class="btn link" style="color:var(--danger)" data-z="${esc(z.id)}">Remove</button></td></tr>`;
+          }).join('')}</tbody></table>` : empty('pin', 'No zones yet — add your first below.')}</div></div>
         <div class="card"><h2>${ic('pin')} Add zone</h2>
           <div class="row"><input id="zn" placeholder="Zone name" style="flex:1;min-width:160px">
             <button class="btn" id="zloc">Use my location</button></div>
-          ${hasMap ? '<div id="zmap" style="margin-top:10px"></div><div class="map-hint">Tap the map to drop the zone, drag the dot to move it, drag the small white handle to resize.</div>' : ''}
+          ${hasMap ? '<div class="map-hint" style="margin-top:8px">Place it on the map above, or type coordinates here.</div>' : ''}
           <div class="row" style="margin-top:6px"><input id="zlat" placeholder="lat" style="width:120px"><input id="zlng" placeholder="lng" style="width:120px">
             <input id="zr" type="number" value="100" min="10" step="10" style="width:96px"> <span class="muted">m</span>
             <button class="btn primary" id="zadd">Add</button></div>
@@ -732,6 +943,83 @@
           L.circle([z.lat, z.lng], { radius: z.radiusM, color: '#8aa0a8', weight: 1, fillOpacity: .08 }).addTo(map).bindTooltip(z.name);
           pts.push([z.lat, z.lng]);
         });
+
+        // Where each person last punched. Their own accuracy circle is drawn
+        // too, so a ±200 m fix visibly can't be read as a precise position —
+        // the map should never imply more certainty than the phone had.
+        const peopleLayer = L.layerGroup();
+        const personIcon = (isIn) => L.divIcon({
+          className: '', html: `<div class="ppin${isIn ? ' in' : ''}"></div>`,
+          iconSize: [14, 14], iconAnchor: [7, 7],
+        });
+
+        // Co-located people hide each other: a whole team at one office would
+        // draw as ONE dot, which is the exact case this map exists for.
+        //
+        // Cluster by real DISTANCE, not by rounding coordinates to a grid — a
+        // grid puts a hard edge through the middle of an office, so two people
+        // standing together can land in different cells and never get separated
+        // while still overlapping on screen.
+        //
+        // Each cluster is then fanned onto a ring around its centroid, sized by
+        // how many people are in it, so they always come apart. The ring is a
+        // DISPLAY offset only: the accuracy circle stays on the true position
+        // and the tooltip still reports the real distance from the zone centre.
+        const CLUSTER_M = 30;
+        const groups = [];
+        people.forEach((p) => {
+          const here = L.latLng(p.lastLocation.lat, p.lastLocation.lng);
+          const near = groups.find((g) => g.some((q) =>
+            here.distanceTo(L.latLng(q.lastLocation.lat, q.lastLocation.lng)) <= CLUSTER_M));
+          if (near) near.push(p); else groups.push([p]);
+        });
+        const centroid = (g) => [
+          g.reduce((s, q) => s + q.lastLocation.lat, 0) / g.length,
+          g.reduce((s, q) => s + q.lastLocation.lng, 0) / g.length,
+        ];
+        const fanned = (group, i) => {
+          const n = group.length;
+          if (n < 2) return [group[0].lastLocation.lat, group[0].lastLocation.lng];
+          const [cLat, cLng] = centroid(group);
+          const ringM = Math.max(14, 5 * n);
+          const a = (2 * Math.PI * i) / n;
+          return [
+            cLat + (ringM * Math.cos(a)) / 111320,
+            cLng + (ringM * Math.sin(a)) / ((111320 * Math.cos(cLat * Math.PI / 180)) || 1),
+          ];
+        };
+
+        groups.forEach((group) => {
+          group.forEach((p, i) => {
+            const loc = p.lastLocation;
+            const truth = [loc.lat, loc.lng];
+            const at = fanned(group, i);
+            if (loc.accuracyM) {
+              L.circle(truth, {
+                radius: Math.max(loc.accuracyM, 8),
+                color: p.checkedIn ? '#159a63' : '#8aa0a8',
+                weight: 1, fillOpacity: .07, interactive: false,
+              }).addTo(peopleLayer);
+            }
+            const detail = [
+              p.checkedIn ? 'On the clock' : 'Checked out',
+              `last fix ${timeOf(loc.at)}`,
+              loc.zoneName ? esc(loc.zoneName) : null,
+              loc.distanceM != null ? `${metres(loc.distanceM)} from centre` : null,
+              loc.accuracyM != null ? `±${metres(loc.accuracyM)}` : null,
+              p.verification !== 'verified' ? (VERIFY[p.verification] || {}).label : null,
+              group.length > 1 ? `${group.length} people within ${CLUSTER_M} m — dots spread apart to stay readable` : null,
+            ].filter(Boolean).join(' · ');
+            L.marker(at, { icon: personIcon(p.checkedIn) })
+              .addTo(peopleLayer)
+              .bindTooltip(`<strong>${esc(p.name || p.employeeRef)}</strong><br>${detail}`, { direction: 'top' });
+            pts.push(truth);
+          });
+        });
+        peopleLayer.addTo(map);
+        const toggle = $('zshow');
+        if (toggle) toggle.onchange = () => (toggle.checked ? peopleLayer.addTo(map) : map.removeLayer(peopleLayer));
+
         if (pts.length) map.fitBounds(pts, { padding: [40, 40], maxZoom: 16 }); else map.setView([20, 0], 2);
         setTimeout(() => map.invalidateSize(), 0);
 
@@ -787,9 +1075,49 @@
           </div>
         </div>
         <div class="card"><h2>${ic('users')} Activity today</h2>
-        ${rows.length ? `<table><thead><tr><th>Employee</th><th>Status</th><th>Since</th></tr></thead><tbody>
-        ${rows.map((r) => `<tr><td>${esc(r.employeeRef)}</td><td>${r.checkedIn ? '<span class="pill complete">In</span>' : '<span class="pill">Out</span>'}</td><td class="num">${timeOf(r.at)}</td></tr>`).join('')}</tbody></table>`
+        ${rows.length ? `
+        <div class="toolbar">
+          <input class="search" id="pq" type="search" placeholder="Search name" autocomplete="off">
+          <select id="pf" title="Filter">
+            <option value="">Everyone with activity</option>
+            <option value="in">Checked in now</option>
+            <option value="out">Checked out</option>
+            <option value="unverified">Location not confirmed</option>
+          </select>
+          <span class="count" id="pcount"></span>
+        </div>
+        <div id="pbody"></div>
+        <p class="muted" style="font-size:.74rem;margin:12px 0 0">Location is where the person was when they last punched — the phone only reports on arrival and departure, not continuously. See everyone on a map in the Zones tab.</p>`
         : empty('activity', 'No check-ins yet today.')}</div>`;
+      if (!rows.length) return;
+
+      const render = () => {
+        const qy = ($('pq').value || '').trim().toLowerCase();
+        const f = $('pf').value;
+        const list = rows.filter((r) => {
+          if (qy && !`${r.name || ''} ${r.email || ''} ${r.employeeRef}`.toLowerCase().includes(qy)) return false;
+          if (f === 'in' && !r.checkedIn) return false;
+          if (f === 'out' && r.checkedIn) return false;
+          if (f === 'unverified' && r.verification === 'verified') return false;
+          return true;
+        });
+        $('pcount').textContent = list.length === rows.length
+          ? `${rows.length} ${rows.length === 1 ? 'person' : 'people'}`
+          : `${list.length} of ${rows.length}`;
+        $('pbody').innerHTML = list.length
+          ? `<table><thead><tr><th>Employee</th><th>Status</th><th>Since</th><th>Last known location</th></tr></thead><tbody>
+            ${list.map((r) => `<tr>
+              <td><div style="font-weight:600">${esc(r.name || r.employeeRef)}</div>${r.name && r.email ? `<div class="muted" style="font-size:.74rem">${esc(r.email)}</div>` : ''}</td>
+              <td>${r.checkedIn ? '<span class="pill complete">In</span>' : '<span class="pill">Out</span>'}</td>
+              <td class="num">${timeOf(r.at)}</td>
+              <td><div>${whereText(r.lastLocation)}</div>
+                  <div style="margin-top:4px">${vbadge(r.verification, r.verificationReason)} ${r.lastLocation ? `<span class="tag">as of ${esc(timeOf(r.lastLocation.at))}</span>` : ''}</div></td>
+            </tr>`).join('')}</tbody></table>`
+          : empty('activity', 'Nobody matches those filters.');
+      };
+      $('pq').oninput = render;
+      $('pf').onchange = render;
+      render();
     };
 
     VIEWS.settings = async () => {

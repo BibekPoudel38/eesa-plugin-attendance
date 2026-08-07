@@ -50,6 +50,97 @@ const zoneOut = (r) => ({
   radiusM: Number(r.radius_m),
 });
 
+// Metres between two lat/lng pairs (haversine). Zone-scale distances only, so
+// the spherical approximation is far more precise than any phone's GPS fix —
+// no PostGIS dependency needed just to say "40 m from the centre".
+function metresBetween(aLat, aLng, bLat, bLng) {
+  const R = 6371000;
+  const rad = (d) => (d * Math.PI) / 180;
+  const dLat = rad(bLat - aLat);
+  const dLng = rad(bLng - aLng);
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(rad(aLat)) * Math.cos(rad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
+// Can this punch be trusted against the zone it claims?
+//
+//   verified   — the device sent a position and it lands inside the zone.
+//   outside    — it sent a position and that position is clearly beyond the
+//                zone, further out than the fix's own error could explain.
+//   unverified — we have nothing to check: no fix at all (offline, GPS refused,
+//                an admin logging it by hand) or no zone on the event.
+//
+// "unverified" is NOT a rejection and never hides the record — plenty of honest
+// punches land here (a basement with no GPS, a manual correction). It only says
+// the system couldn't confirm the location itself, and the UI marks it so.
+//
+// The comparison allows the fix's own accuracy as slack in BOTH directions: a
+// ±150 m reading 120 m outside a 100 m zone is not evidence of anything, so it
+// stays "verified" rather than accusing someone on the strength of bad GPS.
+const VERIFY_SLACK_MAX_M = 250;
+
+function verifyOut(loc) {
+  if (!loc) return { state: 'unverified', reason: 'No location was recorded with this punch.' };
+  if (loc.distanceM == null) {
+    return { state: 'unverified', reason: 'Recorded without a work zone to check against.' };
+  }
+  const slack = Math.min(loc.accuracyM == null ? 0 : loc.accuracyM, VERIFY_SLACK_MAX_M);
+  const radius = loc.radiusM == null ? 0 : loc.radiusM;
+  if (loc.distanceM <= radius + slack) {
+    return {
+      state: 'verified',
+      reason: `Location confirmed ${loc.distanceM} m from the centre of ${loc.zoneName || 'the zone'}.`,
+    };
+  }
+  return {
+    state: 'outside',
+    reason: `Recorded ${loc.distanceM} m from the centre of ${loc.zoneName || 'the zone'}, outside its ${radius} m radius.`,
+  };
+}
+
+// The position attached to an event, related back to the zone it was recorded
+// against: how far from the centre, and whether that puts the person inside.
+// Returns null when the device had no fix (older rows, admin manual entries).
+function locationOut(r) {
+  if (r.lat == null || r.lng == null) return null;
+  const lat = Number(r.lat);
+  const lng = Number(r.lng);
+  const out = {
+    lat,
+    lng,
+    accuracyM: r.accuracy_m == null ? null : Math.round(Number(r.accuracy_m)),
+    zoneId: r.zone_id == null ? null : String(r.zone_id),
+    zoneName: r.zone_name || null,
+    radiusM: r.radius_m == null ? null : Number(r.radius_m),
+    distanceM: null,
+    inside: null,
+  };
+  if (r.center_lat != null && r.center_lng != null) {
+    const d = metresBetween(lat, lng, Number(r.center_lat), Number(r.center_lng));
+    out.distanceM = Math.round(d);
+    out.inside = d <= Number(r.radius_m || 0);
+  }
+  return out;
+}
+
+// Roll a day's punches up into one badge. A day is only "verified" when every
+// punch in it was; one unconfirmable punch makes the day partial rather than
+// silently passing. Days with nothing to check at all read "unverified".
+function dayVerification(events) {
+  const counts = { verified: 0, unverified: 0, outside: 0 };
+  for (const e of events) counts[e.verification] = (counts[e.verification] || 0) + 1;
+  const state = counts.outside > 0
+    ? 'outside'
+    : counts.verified === 0
+      ? 'unverified'
+      : counts.unverified > 0
+        ? 'partial'
+        : 'verified';
+  return { verification: state, verificationCounts: counts };
+}
+
 // ---- zones ----------------------------------------------------------------
 export async function listZones(tenantId) {
   const rows = await q(
@@ -146,29 +237,64 @@ export async function resolveNfcTag(tenantId, uid) {
 }
 
 // ---- events / check-in-out ------------------------------------------------
+// Every punch carries WHERE it happened when the device could supply a fix.
+//
+// The explicit null/'' check matters more than it looks: Number(null) is 0, so
+// a plain `Number.isFinite` guard would quietly turn "this phone had no GPS"
+// into the coordinates 0,0 — a point in the Gulf of Guinea that then reads as
+// "outside the work zone" and marks an honest punch as a violation. No fix has
+// to stay null all the way down.
+const num = (v) => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+const coord = (v, max) => {
+  const n = num(v);
+  return n != null && Math.abs(n) <= max ? n : null;
+};
+
 export async function recordEvent(
   tenantId, employeeRef, type,
-  { zoneId = null, lat = null, lng = null, forWork = true, source = 'geofence', workType = null } = {},
+  { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true,
+    source = 'geofence', workType = null } = {},
 ) {
+  const la = coord(lat, 90);
+  const ln = coord(lng, 180);
+  // '' is not a uuid — a client clocking out away from a zone must land as a
+  // null FK, not a Postgres type error that loses the punch.
+  const zid = zoneId === '' || zoneId === undefined ? null : zoneId;
+  // Same trap: a missing accuracy must stay null, not become 0 — "0 m" would
+  // claim a perfect fix and remove all the slack the verification allows.
+  const rawAcc = num(accuracyM);
+  const acc = rawAcc != null && rawAcc >= 0 ? Math.min(rawAcc, 100000) : null;
   const rows = await q(
-    `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, for_work, source, work_type)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id, type, at`,
-    [tenantId, employeeRef, type, zoneId, lat, lng, forWork !== false, String(source || 'geofence'),
-     workType ? String(workType).slice(0, 120) : null],
+    `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, accuracy_m, for_work, source, work_type)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id, type, at`,
+    [tenantId, employeeRef, type, zid, la, ln, acc, forWork !== false,
+     String(source || 'geofence'), workType ? String(workType).slice(0, 120) : null],
   );
   await upsertDaySummary(tenantId, employeeRef);
   return { id: String(rows[0].id), type: rows[0].type, at: iso(rows[0].at) };
 }
 
 // Today's raw events, ascending — the basis for status + the day summary.
-// "Today" is the tenant's LOCAL day (not the DB/UTC day).
+// "Today" is the tenant's LOCAL day (not the DB/UTC day). The location columns
+// and the zone join ride along so myStatus can hand the app a full picture of
+// the day (where each punch happened, whether it checks out) in ONE call —
+// the detail view opened from the phone's banner is built entirely from this.
 async function todaysEvents(tenantId, employeeRef) {
   const tz = await tenantTz(tenantId);
   return q(
-    `select type, zone_id, at, for_work from events
-      where tenant_id = $1 and employee_ref = $2
-        and at >= (date_trunc('day', now() at time zone $3) at time zone $3)
-      order by at asc`,
+    `select e.id, e.employee_ref, e.type, e.zone_id, e.at, e.for_work, e.source,
+            e.work_type, e.lat, e.lng, e.accuracy_m,
+            z.name as zone_name, z.center_lat, z.center_lng, z.radius_m,
+            '' as name, (e.at at time zone $3)::date as day
+       from events e
+       left join zones z on z.id = e.zone_id
+      where e.tenant_id = $1 and e.employee_ref = $2
+        and e.at >= (date_trunc('day', now() at time zone $3) at time zone $3)
+      order by e.at asc`,
     [tenantId, employeeRef, tz],
   );
 }
@@ -177,6 +303,7 @@ async function todaysEvents(tenantId, employeeRef) {
 // counted as an open interval up to "now" (so hours-worked ticks live).
 function computeToday(events) {
   let openIn = null; // Date of an unmatched check_in
+  let openEvent = null; // ...and the row it came from, for the detail view
   let firstIn = null;
   let lastOut = null;
   let lastZone = null;
@@ -188,17 +315,19 @@ function computeToday(events) {
       // counting work time from this point — it closes any open interval and does
       // NOT reopen one.
       if (e.for_work === false) {
-        if (openIn) { ms += at - openIn; openIn = null; }
+        if (openIn) { ms += at - openIn; openIn = null; openEvent = null; }
         continue;
       }
       firstIn ??= at;
       openIn = at;
+      openEvent = e;
       lastZone = e.zone_id;
     } else if (e.type === 'check_out') {
       lastOut = at;
       if (openIn) {
         ms += at - openIn;
         openIn = null;
+        openEvent = null;
       }
     }
   }
@@ -207,6 +336,7 @@ function computeToday(events) {
   return {
     checkedIn,
     since: checkedIn ? openIn : null,
+    openEvent: checkedIn ? openEvent : null,
     zoneId: checkedIn && lastZone != null ? String(lastZone) : null,
     firstIn,
     lastOut,
@@ -216,25 +346,79 @@ function computeToday(events) {
 
 export async function myStatus(tenantId, employeeRef) {
   const tz = await tenantTz(tenantId);
-  const events = await todaysEvents(tenantId, employeeRef);
-  const t = computeToday(events);
-  const today = events.length
+  const rows = await todaysEvents(tenantId, employeeRef);
+  const t = computeToday(rows);
+  const events = rows.map(eventOut).reverse();       // newest first, for display
+  const dayV = dayVerification(events);
+  const open = t.openEvent ? eventOut(t.openEvent) : null;
+  const today = rows.length
     ? {
         date: new Date().toLocaleDateString('en-CA', { timeZone: tz }),
         totalMinutes: t.totalMinutes,
         firstIn: iso(t.firstIn),
         lastOut: iso(t.lastOut),
         status: t.checkedIn ? 'open' : t.firstIn && t.lastOut ? 'complete' : 'incomplete',
+        ...dayV,
       }
     : null;
   return {
     checkedIn: t.checkedIn,
     since: iso(t.since),
     zoneId: t.zoneId,
+    // The open punch's zone by NAME, so the app never has to re-look-up an id
+    // just to say where you are.
+    zoneName: open && open.location ? open.location.zoneName : null,
+    workType: open ? open.workType : null,
     todayMinutes: t.totalMinutes,
+    // How the CURRENT shift was verified (null when off the clock), and how the
+    // day as a whole came out.
+    verification: open ? open.verification : dayV.verification,
+    verificationReason: open ? open.verificationReason : null,
+    currentPunch: open,
+    // Today's punches in full — the phone's detail sheet renders straight from
+    // this, so opening it costs nothing extra.
+    events,
     today,
   };
 }
+
+// Verification badge for every (employee, local day) in a window, in one query.
+// day_summaries carries no location, so the badge has to be derived from the
+// underlying punches — myHistory, employeeDetail and listApprovals all read it
+// from here so they can never disagree about whether a day checks out.
+// Key: `${employeeRef}|${YYYY-MM-DD}`.
+async function verificationIndex(tenantId, { from = null, to = null, employeeRef = null } = {}) {
+  const tz = await tenantTz(tenantId);
+  const params = [tenantId, tz, from || '1970-01-01', to || '2999-12-31'];
+  const clauses = [
+    'e.tenant_id = $1',
+    '(e.at at time zone $2)::date between $3::date and $4::date',
+  ];
+  if (employeeRef) { params.push(employeeRef); clauses.push(`e.employee_ref = $${params.length}`); }
+  const rows = await q(
+    `select e.employee_ref, e.lat, e.lng, e.accuracy_m, e.zone_id,
+            z.name as zone_name, z.center_lat, z.center_lng, z.radius_m,
+            (e.at at time zone $2)::date as day
+       from events e
+       left join zones z on z.id = e.zone_id
+      where ${clauses.join(' and ')}`,
+    params,
+  );
+  const grouped = new Map();
+  for (const r of rows) {
+    const key = `${r.employee_ref}|${dayStr(r.day)}`;
+    const list = grouped.get(key) || [];
+    list.push({ verification: verifyOut(locationOut(r)).state });
+    grouped.set(key, list);
+  }
+  const out = new Map();
+  for (const [key, list] of grouped) out.set(key, dayVerification(list));
+  return out;
+}
+
+// A day with no punches at all to check against still needs a badge, so the
+// caller never renders a blank where a marker belongs.
+const NO_EVENTS = { verification: 'unverified', verificationCounts: { verified: 0, unverified: 0, outside: 0 } };
 
 export async function myHistory(tenantId, employeeRef, days = 7) {
   const rows = await q(
@@ -242,14 +426,26 @@ export async function myHistory(tenantId, employeeRef, days = 7) {
       where tenant_id = $1 and employee_ref = $2 order by day desc limit $3`,
     [tenantId, employeeRef, Math.max(1, Math.min(days, 90))],
   );
+  const dates = rows.map((r) => dayStr(r.day));
+  const vi = dates.length
+    ? await verificationIndex(tenantId, {
+        employeeRef,
+        from: dates[dates.length - 1],
+        to: dates[0],
+      })
+    : new Map();
   return {
-    days: rows.map((r) => ({
-      date: dayStr(r.day),
-      totalMinutes: Number(r.total_minutes || 0),
-      firstIn: iso(r.first_in),
-      lastOut: iso(r.last_out),
-      status: r.last_out ? 'complete' : r.first_in ? 'incomplete' : 'open',
-    })),
+    days: rows.map((r) => {
+      const date = dayStr(r.day);
+      return {
+        date,
+        totalMinutes: Number(r.total_minutes || 0),
+        firstIn: iso(r.first_in),
+        lastOut: iso(r.last_out),
+        status: r.last_out ? 'complete' : r.first_in ? 'incomplete' : 'open',
+        ...(vi.get(`${employeeRef}|${date}`) || NO_EVENTS),
+      };
+    }),
   };
 }
 
@@ -267,14 +463,19 @@ export async function employeeDetail(tenantId, employeeRef, { from = null, to = 
       order by day desc`,
     [tenantId, employeeRef, f, t],
   );
-  const days = rows.map((r) => ({
-    date: dayStr(r.day),
-    totalMinutes: Number(r.total_minutes || 0),
-    firstIn: iso(r.first_in),
-    lastOut: iso(r.last_out),
-    approvalStatus: r.approval_status || null,
-    status: r.last_out ? 'complete' : r.first_in ? 'incomplete' : 'open',
-  }));
+  const vi = await verificationIndex(tenantId, { employeeRef, from: f === '1970-01-01' ? null : f, to: t === '2999-12-31' ? null : t });
+  const days = rows.map((r) => {
+    const date = dayStr(r.day);
+    return {
+      date,
+      totalMinutes: Number(r.total_minutes || 0),
+      firstIn: iso(r.first_in),
+      lastOut: iso(r.last_out),
+      approvalStatus: r.approval_status || null,
+      status: r.last_out ? 'complete' : r.first_in ? 'incomplete' : 'open',
+      ...(vi.get(`${employeeRef}|${date}`) || NO_EVENTS),
+    };
+  });
   // Roll the same rows up by calendar month, so the UI never has to re-derive
   // it (and can't disagree with the day list it is showing).
   const byMonth = new Map();
@@ -325,21 +526,161 @@ export async function presentToday(tenantId) {
   return rows.map((r) => r.employee_ref);
 }
 
+// Who is in today, WHO they are, and where they last were. Three things in one
+// query because the "Who's in" table and the live zone map both need all of it:
+//   latest  — the most recent event per person (decides in/out + since when)
+//   located — their most recent event that actually carried a position, which
+//             is usually the same row but survives a locationless punch (an
+//             admin manual entry, or a check-out taken with no fix)
+// The zones ride along so the map can draw its circles in the same round-trip.
+// Names come from the plugin's membership row here; server.js merges the
+// authoritative tenant roster over the top.
 export async function presence(tenantId) {
   const tz = await tenantTz(tenantId);
-  const rows = await q(
-    `select distinct on (employee_ref) employee_ref, type, at from events
-      where tenant_id = $1 and at >= (date_trunc('day', now() at time zone $2) at time zone $2)
-      order by employee_ref, at desc`,
-    [tenantId, tz],
-  );
+  const [rows, zones] = await Promise.all([
+    q(
+      `with day_start as (
+         select (date_trunc('day', now() at time zone $2) at time zone $2) as t
+       ),
+       latest as (
+         select distinct on (employee_ref) employee_ref, type, at
+           from events, day_start
+          where tenant_id = $1 and at >= day_start.t
+          order by employee_ref, at desc
+       ),
+       located as (
+         select distinct on (employee_ref) employee_ref, lat, lng, accuracy_m, zone_id, at
+           from events, day_start
+          where tenant_id = $1 and at >= day_start.t
+            and lat is not null and lng is not null
+          order by employee_ref, at desc
+       )
+       select l.employee_ref, l.type, l.at,
+              g.lat, g.lng, g.accuracy_m, g.zone_id, g.at as located_at,
+              z.name as zone_name, z.center_lat, z.center_lng, z.radius_m,
+              coalesce(m.name, '') as name
+         from latest l
+         left join located     g on g.employee_ref = l.employee_ref
+         left join zones       z on z.id = g.zone_id
+         left join memberships m on m.tenant_id = $1 and m.employee_ref = l.employee_ref
+        order by l.at desc`,
+      [tenantId, tz],
+    ),
+    listZones(tenantId),
+  ]);
   return {
-    employees: rows.map((r) => ({
-      employeeRef: r.employee_ref,
-      checkedIn: r.type === 'check_in',
-      at: iso(r.at),
-    })),
+    zones,
+    employees: rows.map((r) => {
+      const loc = locationOut(r);
+      const v = verifyOut(loc);
+      return {
+        employeeRef: r.employee_ref,
+        name: r.name || '',
+        checkedIn: r.type === 'check_in',
+        at: iso(r.at),
+        // Where they were when they last punched — NOT a live position. The
+        // device only reports at a geofence trigger, so `lastLocation.at` is
+        // what the UI must show alongside the dot.
+        lastLocation: loc ? { ...loc, at: iso(r.located_at) } : null,
+        verification: v.state,
+        verificationReason: v.reason,
+      };
+    }),
   };
+}
+
+// The raw punch log with positions — "when was this person here, and where
+// exactly". One row per event (not per day), newest first, over a LOCAL-day
+// range. Powers the per-day drill-down under a person's logs.
+export async function eventLog(
+  tenantId, { employeeRef = null, from = null, to = null, limit = 500 } = {},
+) {
+  const tz = await tenantTz(tenantId);
+  const params = [tenantId, tz];
+  const clauses = ['e.tenant_id = $1'];
+  if (from) {
+    params.push(from);
+    clauses.push(`e.at >= ((($${params.length}::date)::timestamp) at time zone $2)`);
+  }
+  if (to) {
+    params.push(to);
+    clauses.push(`e.at < ((($${params.length}::date + 1)::timestamp) at time zone $2)`);
+  }
+  if (employeeRef) { params.push(employeeRef); clauses.push(`e.employee_ref = $${params.length}`); }
+  params.push(Math.max(1, Math.min(Number(limit) || 500, 2000)));
+  const rows = await q(
+    `select e.id, e.employee_ref, e.type, e.at, e.source, e.work_type, e.for_work,
+            e.lat, e.lng, e.accuracy_m, e.zone_id,
+            z.name as zone_name, z.center_lat, z.center_lng, z.radius_m,
+            coalesce(m.name, '') as name,
+            (e.at at time zone $2)::date as day
+       from events e
+       left join zones       z on z.id = e.zone_id
+       left join memberships m on m.tenant_id = e.tenant_id and m.employee_ref = e.employee_ref
+      where ${clauses.join(' and ')}
+      order by e.at desc
+      limit $${params.length}`,
+    params,
+  );
+  return rows.map(eventOut);
+}
+
+// One punch, normalized: when, what, where, and whether the where checks out.
+const eventOut = (r) => {
+  const location = locationOut(r);
+  const v = verifyOut(location);
+  return {
+    id: String(r.id),
+    employeeRef: r.employee_ref,
+    name: r.name || '',
+    day: dayStr(r.day),
+    type: r.type,
+    at: iso(r.at),
+    source: r.source || 'geofence',
+    workType: r.work_type || null,
+    forWork: r.for_work !== false,
+    location,
+    verification: v.state,          // 'verified' | 'outside' | 'unverified'
+    verificationReason: v.reason,
+  };
+};
+
+// A staff member's OWN punches — the same rows the admin log shows, minus
+// anyone else's. This is what lets someone see an unverified punch of theirs
+// and understand why it is marked that way instead of just finding it missing.
+export async function myEvents(tenantId, employeeRef, { from = null, to = null, days = null } = {}) {
+  const tz = await tenantTz(tenantId);
+  const params = [tenantId, tz, employeeRef];
+  const clauses = ['e.tenant_id = $1', 'e.employee_ref = $3'];
+  if (from) {
+    params.push(from);
+    clauses.push(`e.at >= ((($${params.length}::date)::timestamp) at time zone $2)`);
+  } else {
+    // Default window: the last N local days, "today" included.
+    params.push(Math.max(1, Math.min(Number(days) || 7, 90)));
+    // Explicit ::int — the driver sends the bind as untyped text, and
+    // make_interval(days => …) needs an integer, not an inference.
+    clauses.push(
+      `e.at >= ((date_trunc('day', now() at time zone $2) - make_interval(days => $${params.length}::int - 1)) at time zone $2)`,
+    );
+  }
+  if (to) {
+    params.push(to);
+    clauses.push(`e.at < ((($${params.length}::date + 1)::timestamp) at time zone $2)`);
+  }
+  const rows = await q(
+    `select e.id, e.employee_ref, e.type, e.at, e.source, e.work_type, e.for_work,
+            e.lat, e.lng, e.accuracy_m, e.zone_id,
+            z.name as zone_name, z.center_lat, z.center_lng, z.radius_m,
+            '' as name, (e.at at time zone $2)::date as day
+       from events e
+       left join zones z on z.id = e.zone_id
+      where ${clauses.join(' and ')}
+      order by e.at desc
+      limit 1000`,
+    params,
+  );
+  return rows.map(eventOut);
 }
 
 // One-shot "state of attendance today" for the agent: present / absent / late,
@@ -627,19 +968,27 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
       order by ds.day desc, name`,
     params,
   );
-  return rows.map((r) => ({
-    employeeRef: r.employee_ref,
-    name: r.name,
-    day: dayStr(r.day),
-    firstIn: iso(r.first_in),
-    lastOut: iso(r.last_out),
-    totalMinutes: Number(r.total_minutes || 0),
-    expectedMinutes: r.expected_minutes == null ? null : Number(r.expected_minutes),
-    approvalStatus: r.approval_status || 'pending',
-    approvedBy: r.approved_by || null,
-    approvedAt: iso(r.approved_at),
-    payRate: r.pay_rate == null ? null : Number(r.pay_rate),
-  }));
+  const vi = await verificationIndex(tenantId, { from, to });
+  return rows.map((r) => {
+    const day = dayStr(r.day);
+    return {
+      employeeRef: r.employee_ref,
+      name: r.name,
+      day,
+      firstIn: iso(r.first_in),
+      lastOut: iso(r.last_out),
+      totalMinutes: Number(r.total_minutes || 0),
+      expectedMinutes: r.expected_minutes == null ? null : Number(r.expected_minutes),
+      approvalStatus: r.approval_status || 'pending',
+      approvedBy: r.approved_by || null,
+      approvedAt: iso(r.approved_at),
+      payRate: r.pay_rate == null ? null : Number(r.pay_rate),
+      // Whether the punches behind this timesheet could be confirmed on
+      // location. Surfaced so the manager approves with that in view — it is
+      // never a filter, an unverified day is still there to approve.
+      ...(vi.get(`${r.employee_ref}|${day}`) || NO_EVENTS),
+    };
+  });
 }
 
 export async function setApproval(tenantId, employeeRef, day, status, approvedBy) {
