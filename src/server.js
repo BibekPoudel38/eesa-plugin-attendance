@@ -20,6 +20,35 @@ const serverInfo = { name: MANIFEST.slug, version: MANIFEST.version };
 const app = express();
 app.use(express.json());
 
+// ---- Async route safety ----------------------------------------------------
+// Express 4 does NOT catch a rejected promise from an `async` handler. Node then
+// treats it as an unhandled rejection and KILLS THE PROCESS — so one database
+// hiccup took the whole service down and Coolify restarted it into a crash
+// loop, with the request never answered and the real cause buried in a restart
+// storm. A plugin must degrade to a 500, not to a dead container.
+//
+// Wrapping at registration covers every route, including ones added later, so
+// this can't be forgotten at a single call site the way a per-route try/catch
+// can. Handlers with 4 args are Express error middleware and are left alone.
+const wrapAsync = (fn) =>
+  typeof fn !== 'function' || fn.length === 4
+    ? fn
+    : (req, res, next) => {
+        try {
+          return Promise.resolve(fn(req, res, next)).catch(next);
+        } catch (e) {
+          return next(e);
+        }
+      };
+
+for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
+  const original = app[method].bind(app);
+  app[method] = (path, ...handlers) =>
+    // app.get('setting') is also Express's config READER — only a call that
+    // actually passes handlers is a route registration.
+    handlers.length ? original(path, ...handlers.map(wrapAsync)) : original(path);
+}
+
 // The admin UI is embedded inside the Eesa shell; allow framing from it only.
 app.use((req, res, next) => {
   res.setHeader('Content-Security-Policy', "frame-ancestors https://app.eesa.ai https://eesa.ai");
@@ -32,7 +61,34 @@ app.use('/vendor', express.static(join(__dirname, '..', 'public', 'vendor'), {
   maxAge: '30d', immutable: true,
 }));
 
+// Liveness: the process is up. Deliberately does NOT touch the database, so a
+// database outage can't make the orchestrator kill an otherwise-healthy
+// container (and so the Flutter app's reachability probe still distinguishes
+// "can't reach the host" from "the host is fine, the database isn't").
 app.get('/health', (req, res) => res.json({ ok: true, plugin: MANIFEST.slug }));
+
+// Readiness: can we actually reach Postgres? Reports the failing HOSTNAME and
+// the errno, because the usual cause is a DATABASE_URL pointing at a service
+// name this container cannot resolve — and "getaddrinfo EAI_AGAIN <uuid>" in a
+// restart-looping log is a lot harder to act on than this is.
+app.get('/health/db', async (req, res) => {
+  try {
+    await db.ping();
+    res.json({ ok: true, database: 'reachable' });
+  } catch (e) {
+    res.status(503).json({
+      ok: false,
+      database: 'unreachable',
+      code: e.code || null,
+      host: e.hostname || db.dbHost(),
+      hint:
+        e.code === 'EAI_AGAIN' || e.code === 'ENOTFOUND'
+          ? 'The database hostname in DATABASE_URL does not resolve from this container. Check that the database service is running and on the same network as this app.'
+          : 'The database rejected or dropped the connection. Check DATABASE_URL credentials and PGSSL.',
+    });
+  }
+});
+
 app.get('/manifest', (req, res) => res.json(MANIFEST));
 
 // ---- MCP surface: gateway-only + token, JSON-RPC ----
@@ -112,8 +168,13 @@ function withMember({ manager = false } = {}) {
       req.member = member;
       req.appRole = role;
       next();
-    } catch {
-      return res.status(500).json({ ok: false, error: 'membership lookup failed' });
+    } catch (e) {
+      // Hand the real error to the central handler rather than flattening every
+      // cause into "membership lookup failed". A database that can't be reached
+      // is a 503 the client should retry, not a 500 it should give up on — and
+      // swallowing it here meant EVERY enrolled-user route reported the wrong
+      // status and a message that named nothing.
+      return next(e);
     }
   };
 }
@@ -462,5 +523,50 @@ app.get('/api/ui/context', authMiddleware({ surface: 'ui' }), async (req, res) =
   });
 });
 
+// ---- Error handler: last stop before the process would have died -----------
+// Must be registered AFTER every route. Anything a handler rejects with lands
+// here and becomes a JSON 500 in the plugin's standard envelope. The message is
+// deliberately generic (it can carry connection strings and internals); the log
+// line keeps the detail for whoever is reading the container output.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  const isDbUnreachable = ['EAI_AGAIN', 'ENOTFOUND', 'ECONNREFUSED', 'ETIMEDOUT'].includes(err && err.code);
+  console.error(
+    `[attendance] ${req.method} ${req.path} failed:`,
+    err && err.code ? `${err.code} ${err.message}` : err,
+  );
+  if (res.headersSent) return;
+  res.status(isDbUnreachable ? 503 : 500).json({
+    ok: false,
+    error: {
+      code: isDbUnreachable ? 'DATABASE_UNREACHABLE' : 'INTERNAL',
+      message: isDbUnreachable
+        ? 'The attendance database is unreachable right now. Please try again shortly.'
+        : 'Something went wrong handling that request.',
+    },
+  });
+});
+
+// A rejection with no owner (a background task, a callback outside a request)
+// would otherwise terminate the process on Node >= 15. Log and keep serving —
+// the routes above each answer for themselves.
+process.on('unhandledRejection', (reason) => {
+  console.error('[attendance] unhandled rejection:', reason);
+});
+
 const port = process.env.PORT || 8080;
-app.listen(port, () => console.log(`attendance plugin listening on :${port}`));
+app.listen(port, () => {
+  console.log(`attendance plugin listening on :${port}`);
+  // Say plainly, at boot, whether the database is actually reachable. Without
+  // this the first sign of a bad DATABASE_URL is a stack trace on whichever
+  // request happens to arrive first.
+  db.ping()
+    .then(() => console.log(`[attendance] database OK (${db.dbHost()})`))
+    .catch((e) =>
+      console.error(
+        `[attendance] DATABASE UNREACHABLE at "${e.hostname || db.dbHost()}" (${e.code || e.message}). ` +
+          'Requests needing data will return 503 until this is fixed. ' +
+          'Check DATABASE_URL and that the database service is running on the same network as this container.',
+      ),
+    );
+});
