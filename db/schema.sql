@@ -176,3 +176,17 @@ create table if not exists nfc_tags (
 -- One registration per physical chip per tenant (case-insensitive UID).
 create unique index if not exists nfc_tags_uid_uidx on nfc_tags (tenant_id, upper(uid));
 create index if not exists nfc_tags_tenant_idx on nfc_tags (tenant_id, active);
+
+-- ===========================================================================
+-- v5: WHERE the punch happened. events.lat/lng already existed but were only
+-- ever written by the geofence path and never read back, so an admin could see
+-- that someone checked in and not where from. Every write path now records a
+-- fix, accuracy_m says how trustworthy it is (a 500 m fix and a 5 m fix mean
+-- very different things), and the partial index serves the "last known position
+-- per employee" lookup behind the live zone map. Idempotent.
+-- ===========================================================================
+alter table events add column if not exists accuracy_m double precision;
+
+create index if not exists events_located_idx
+    on events (tenant_id, employee_ref, at desc)
+ where lat is not null and lng is not null;

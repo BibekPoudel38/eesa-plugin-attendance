@@ -155,20 +155,20 @@ app.get('/api/present', async (req, res) => {
 
 // ---- Employee REST hot path (Flutter) — any enrolled user -----------------
 app.post('/api/checkIn', emp, async (req, res) => {
-  const { zoneId = null, lat = null, lng = null, forWork = true, source = 'geofence', workType = null } = req.body || {};
-  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', { zoneId, lat, lng, forWork, source, workType });
+  const { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true, source = 'geofence', workType = null } = req.body || {};
+  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', { zoneId, lat, lng, accuracyM, forWork, source, workType });
   res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) });
 });
 app.post('/api/checkOut', emp, async (req, res) => {
-  const { zoneId = null, lat = null, lng = null, source = 'geofence' } = req.body || {};
-  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', { zoneId, lat, lng, source });
+  const { zoneId = null, lat = null, lng = null, accuracyM = null, source = 'geofence' } = req.body || {};
+  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', { zoneId, lat, lng, accuracyM, source });
   res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) });
 });
 
 // Employee taps a LOCATION NFC tag with their OWN phone → check-in, or check-out
 // if already in (tap-to-toggle). The tag maps to a zone; the event is source=nfc.
 app.post('/api/checkInNfc', emp, async (req, res) => {
-  const { uid, lat = null, lng = null, workType = null } = req.body || {};
+  const { uid, lat = null, lng = null, accuracyM = null, workType = null } = req.body || {};
   const tag = await db.resolveNfcTag(req.ctx.tenantId, uid);
   if (!tag) {
     return res.status(404).json({ ok: false, error: { code: 'UNKNOWN_TAG', message: 'This NFC tag is not registered for your workspace.' } });
@@ -178,7 +178,7 @@ app.post('/api/checkInNfc', emp, async (req, res) => {
   }
   const before = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
   const type = before.checkedIn ? 'check_out' : 'check_in';
-  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, type, { zoneId: tag.zoneId, lat, lng, source: 'nfc', workType });
+  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, type, { zoneId: tag.zoneId, lat, lng, accuracyM, source: 'nfc', workType });
   res.json({ ok: true, data: { action: type, tag: tag.label || tag.uid, status: await db.myStatus(req.ctx.tenantId, req.ctx.sub) } });
 });
 
@@ -186,20 +186,28 @@ app.post('/api/checkInNfc', emp, async (req, res) => {
 // employee. Manager/admin-authed (a dedicated kiosk-device token can replace
 // this later). Physical badge + attended device resists buddy-punching.
 app.post('/api/kiosk/nfc', manager, async (req, res) => {
-  const { uid, lat = null, lng = null } = req.body || {};
+  const { uid, lat = null, lng = null, accuracyM = null } = req.body || {};
   const tag = await db.resolveNfcTag(req.ctx.tenantId, uid);
   if (!tag || tag.kind !== 'badge' || !tag.employeeRef) {
     return res.status(404).json({ ok: false, error: { code: 'UNKNOWN_BADGE', message: 'This badge is not registered to an employee.' } });
   }
   const before = await db.myStatus(req.ctx.tenantId, tag.employeeRef);
   const type = before.checkedIn ? 'check_out' : 'check_in';
-  await db.recordEvent(req.ctx.tenantId, tag.employeeRef, type, { zoneId: tag.zoneId, lat, lng, source: 'nfc' });
+  await db.recordEvent(req.ctx.tenantId, tag.employeeRef, type, { zoneId: tag.zoneId, lat, lng, accuracyM, source: 'nfc' });
   res.json({ ok: true, data: { action: type, employeeRef: tag.employeeRef, status: await db.myStatus(req.ctx.tenantId, tag.employeeRef) } });
 });
 app.get('/api/getMyStatus', emp, async (req, res) => res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) }));
 app.get('/api/getMyZones', emp, async (req, res) => res.json({ ok: true, data: await db.listZones(req.ctx.tenantId) }));
 app.get('/api/getMyHistory', emp, async (req, res) =>
   res.json({ ok: true, data: await db.myHistory(req.ctx.tenantId, req.ctx.sub, Number(req.query.days) || 7) }));
+// A staff member's OWN punches, with where each happened and whether that
+// location could be confirmed. Self-scoped by the token — this never exposes
+// anyone else's movements. Unverified punches are returned like any other; the
+// client marks them rather than hiding them.
+app.get('/api/getMyEvents', emp, async (req, res) =>
+  res.json({ ok: true, data: await db.myEvents(req.ctx.tenantId, req.ctx.sub, {
+    from: req.query.from || null, to: req.query.to || null, days: req.query.days || null,
+  }) }));
 // The work types THIS user may pick at check-in ("here to work?" prompt).
 app.get('/api/getMyWorkTypes', emp, async (req, res) =>
   res.json({ ok: true, data: await db.myWorkTypes(req.ctx.tenantId, req.ctx.sub) }));
@@ -222,11 +230,19 @@ app.get('/api/admin/members', manager, async (req, res) => {
       email: u.email || (m && m.email) || '',
       role: (m && m.role) || null,
       payRate: (m && m.payRate) ?? null,
+      // The saved job-type assignment has to come back, or the Team tab's
+      // checkboxes render unticked for someone who HAS types assigned — and the
+      // next Save (even one that only touched the pay rate) posts that empty
+      // set straight back and wipes the assignment.
+      workTypeIds: (m && m.workTypeIds) || [],
     };
   });
   for (const m of members) {
     if (!roster.some((u) => String(u.id) === m.employeeRef)) {
-      rows.push({ employeeRef: m.employeeRef, name: m.name, email: m.email, role: m.role, payRate: m.payRate });
+      rows.push({
+        employeeRef: m.employeeRef, name: m.name, email: m.email,
+        role: m.role, payRate: m.payRate, workTypeIds: m.workTypeIds || [],
+      });
     }
   }
   const out = { ok: true, data: rows };
@@ -252,7 +268,44 @@ app.get('/api/admin/zones', manager, async (req, res) => res.json({ ok: true, da
 app.post('/api/admin/zones', manager, async (req, res) => res.json({ ok: true, data: await db.createZone(req.ctx.tenantId, req.body || {}) }));
 app.delete('/api/admin/zones/:id', manager, async (req, res) =>
   res.json({ ok: true, data: await db.deleteZone(req.ctx.tenantId, req.params.id) }));
-app.get('/api/admin/presence', manager, async (req, res) => res.json({ ok: true, data: await db.presence(req.ctx.tenantId) }));
+// Who's in today + where each person last was. The plugin only knows the names
+// it happens to have on a membership row (usually blank), so merge the tenant
+// roster over the top exactly as /admin/members does — a table of bare numeric
+// employeeRefs is unreadable to the admin who has to act on it.
+app.get('/api/admin/presence', manager, async (req, res) => {
+  const tenantId = req.ctx.tenantId;
+  const [data, roster] = await Promise.all([
+    db.presence(tenantId),
+    fetchRoster(tenantId).catch(() => []),
+  ]);
+  const byId = new Map(roster.map((u) => [String(u.id), u]));
+  const employees = data.employees.map((e) => {
+    const u = byId.get(String(e.employeeRef));
+    return { ...e, name: (u && u.name) || e.name || '', email: (u && u.email) || '' };
+  });
+  res.json({ ok: true, data: { ...data, employees } });
+});
+
+// The raw punch log with positions — every event, where it was recorded, and
+// how far that was from the zone centre. Manager-gated; staff read their own
+// days (without other people's positions) via /getMyHistory.
+app.get('/api/admin/events', manager, async (req, res) => {
+  const tenantId = req.ctx.tenantId;
+  const [rows, roster] = await Promise.all([
+    db.eventLog(tenantId, {
+      employeeRef: req.query.employeeRef || null,
+      from: req.query.from || null,
+      to: req.query.to || null,
+      limit: req.query.limit || 500,
+    }),
+    fetchRoster(tenantId).catch(() => []),
+  ]);
+  const byId = new Map(roster.map((u) => [String(u.id), u]));
+  res.json({ ok: true, data: rows.map((r) => {
+    const u = byId.get(String(r.employeeRef));
+    return { ...r, name: (u && u.name) || r.name || '' };
+  }) });
+});
 
 // Approvals: the manager reviews day summaries and approves/rejects them.
 app.get('/api/admin/approvals', manager, async (req, res) =>
