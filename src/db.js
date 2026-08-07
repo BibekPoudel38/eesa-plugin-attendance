@@ -19,7 +19,35 @@ export const pool = new Pool({
   // Managed Postgres (Supabase/Neon/RDS) needs SSL; set PGSSL=disable for a
   // plain/local Postgres (e.g. a Coolify-hosted database).
   ssl: process.env.PGSSL === 'disable' ? false : { rejectUnauthorized: false },
+  // Don't let a request queue forever behind a database that isn't answering:
+  // fail fast so the caller gets a 503 instead of hanging until the client
+  // times out with nothing to show for it.
+  connectionTimeoutMillis: Number(process.env.PGCONNECT_TIMEOUT_MS) || 8000,
 });
+
+// An idle client dying (database restarted, network dropped) makes the pool emit
+// 'error'. On an EventEmitter an unhandled 'error' is THROWN — which killed the
+// whole process for something the next query would have recovered from on a
+// fresh connection. Log it and let the pool discard the client.
+pool.on('error', (err) => {
+  console.error('[attendance] idle database client error:', err && err.code ? `${err.code} ${err.message}` : err);
+});
+
+/// The database host we're configured to talk to, for diagnostics. Parsed from
+/// the URL so it can be reported WITHOUT ever exposing the password.
+export function dbHost() {
+  try {
+    return new URL(process.env.DATABASE_URL || '').hostname || '(DATABASE_URL not set)';
+  } catch {
+    return '(DATABASE_URL unparseable)';
+  }
+}
+
+/// Cheapest possible round trip — is Postgres actually reachable and answering?
+export async function ping() {
+  await pool.query('select 1');
+  return true;
+}
 
 async function q(text, params) {
   const r = await pool.query(text, params);
