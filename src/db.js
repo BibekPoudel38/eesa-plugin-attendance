@@ -282,6 +282,43 @@ const coord = (v, max) => {
   return n != null && Math.abs(n) <= max ? n : null;
 };
 
+/// The caller's most recent punch, of any day. Used to decide whether a new one
+/// actually changes anything — deliberately NOT day-scoped, so a shift that
+/// started before midnight is still recognised as open when the check-out lands
+/// the next morning.
+async function lastEvent(tenantId, employeeRef) {
+  const rows = await q(
+    `select type, zone_id, for_work, at from events
+      where tenant_id = $1 and employee_ref = $2
+      order by at desc limit 1`,
+    [tenantId, employeeRef],
+  );
+  return rows[0] || null;
+}
+
+/// Would this punch just repeat the state the person is already in?
+///
+/// The OS re-fires a geofence "enter" every time the app registers the fence —
+/// on launch, on resume, on a zone refresh — so a single morning produced six
+/// identical check-ins. That is not a cosmetic problem: each one restarted the
+/// open interval, so 92 minutes on site was billed as 23. Presence is a STATE,
+/// and a punch that doesn't change the state is not an event.
+///
+/// A check-in at a DIFFERENT zone is a real move and always recorded. A
+/// "not for work" check-in always records, because that genuinely changes the
+/// state. A check-out with nothing open closes nothing and is dropped.
+function isNoOpPunch(last, type, { zoneId, forWork }) {
+  if (type === 'check_in') {
+    if (forWork === false) return false;           // a real state change
+    if (!last || last.type !== 'check_in') return false;
+    if (last.for_work === false) return false;     // resuming work after a break
+    // Same place (or the new punch names no place) → same presence.
+    return zoneId == null || last.zone_id == null || String(last.zone_id) === String(zoneId);
+  }
+  // check_out: only meaningful if something is actually open.
+  return !last || last.type === 'check_out';
+}
+
 export async function recordEvent(
   tenantId, employeeRef, type,
   { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true,
@@ -292,6 +329,14 @@ export async function recordEvent(
   // '' is not a uuid — a client clocking out away from a zone must land as a
   // null FK, not a Postgres type error that loses the punch.
   const zid = zoneId === '' || zoneId === undefined ? null : zoneId;
+
+  // Drop punches that repeat the state the person is already in. Returning the
+  // CURRENT status (not an error) keeps every caller idempotent: the phone can
+  // re-send an arrival as often as the OS fires one and the record stays true.
+  const last = await lastEvent(tenantId, employeeRef);
+  if (isNoOpPunch(last, type, { zoneId: zid, forWork })) {
+    return { id: null, type, at: iso(last && last.at), duplicate: true };
+  }
   // Same trap: a missing accuracy must stay null, not become 0 — "0 m" would
   // claim a perfect fix and remove all the slack the verification allows.
   const rawAcc = num(accuracyM);
@@ -347,8 +392,19 @@ function computeToday(events) {
         continue;
       }
       firstIn ??= at;
-      openIn = at;
-      openEvent = e;
+      // A second check-in with no check-out between them is the SAME stretch of
+      // presence, so it must not restart the clock. Overwriting openIn here is
+      // what silently discarded the time already worked: six repeat arrivals in
+      // one morning turned 92 minutes on site into 23. Keep the earliest start
+      // and let the interval run.
+      //
+      // recordEvent now refuses to write these, but this has to hold anyway —
+      // every database already contains them, and those days still have to add
+      // up correctly.
+      if (openIn == null) {
+        openIn = at;
+        openEvent = e;
+      }
       lastZone = e.zone_id;
     } else if (e.type === 'check_out') {
       lastOut = at;
