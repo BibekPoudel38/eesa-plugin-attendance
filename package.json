@@ -3,11 +3,14 @@
   "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Eesa attendance plugin — geofence check-in, MCP + REST + embedded UI, on Coolify + Supabase.",
-  "engines": { "node": ">=20" },
+  "description": "Eesa attendance plugin \u2014 geofence check-in, MCP + REST + embedded UI, on Coolify + Supabase.",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node src/server.js",
-    "check": "node --check src/server.js && node --check src/auth.js && node --check src/db.js && node --check src/mcp.js"
+    "check": "node --check src/server.js && node --check src/auth.js && node --check src/db.js && node --check src/mcp.js",
+    "test": "node --test test/"
   },
   "dependencies": {
     "express": "^4.19.2",

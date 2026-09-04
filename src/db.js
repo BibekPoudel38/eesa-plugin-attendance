@@ -81,7 +81,7 @@ const zoneOut = (r) => ({
 // Metres between two lat/lng pairs (haversine). Zone-scale distances only, so
 // the spherical approximation is far more precise than any phone's GPS fix —
 // no PostGIS dependency needed just to say "40 m from the centre".
-function metresBetween(aLat, aLng, bLat, bLng) {
+export function metresBetween(aLat, aLng, bLat, bLng) {
   const R = 6371000;
   const rad = (d) => (d * Math.PI) / 180;
   const dLat = rad(bLat - aLat);
@@ -156,7 +156,7 @@ function locationOut(r) {
 // Roll a day's punches up into one badge. A day is only "verified" when every
 // punch in it was; one unconfirmable punch makes the day partial rather than
 // silently passing. Days with nothing to check at all read "unverified".
-function dayVerification(events) {
+export function dayVerification(events) {
   const counts = { verified: 0, unverified: 0, outside: 0 };
   for (const e of events) counts[e.verification] = (counts[e.verification] || 0) + 1;
   const state = counts.outside > 0
@@ -307,7 +307,7 @@ async function lastEvent(tenantId, employeeRef) {
 /// A check-in at a DIFFERENT zone is a real move and always recorded. A
 /// "not for work" check-in always records, because that genuinely changes the
 /// state. A check-out with nothing open closes nothing and is dropped.
-function isNoOpPunch(last, type, { zoneId, forWork }) {
+export function isNoOpPunch(last, type, { zoneId, forWork }) {
   if (type === 'check_in') {
     if (forWork === false) return false;           // a real state change
     if (!last || last.type !== 'check_in') return false;
@@ -395,7 +395,7 @@ async function todaysEvents(tenantId, employeeRef) {
 
 // Walk paired check_in→check_out intervals; an unmatched trailing check_in is
 // counted as an open interval up to "now" (so hours-worked ticks live).
-function computeToday(events) {
+export function computeToday(events) {
   let openIn = null; // Date of an unmatched check_in
   let openEvent = null; // ...and the row it came from, for the detail view
   let firstIn = null;
