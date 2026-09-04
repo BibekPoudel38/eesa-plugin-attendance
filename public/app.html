@@ -123,15 +123,24 @@
       padding:22px; margin-bottom:14px; border:1px solid var(--line);
       background:var(--card); box-shadow:var(--shadow);
     }
-    .hero--on { background:linear-gradient(135deg,#00A461,#00875A 92%); color:#fff; border-color:transparent; }
-    .hero__top { display:flex; align-items:center; gap:12px; }
+    /* Deliberately quiet, matching the native My attendance screen: a filled
+       dot for state, then the number, then one sentence. The green slab this
+       replaced shouted the LEAST useful part — that you are on the clock,
+       which the person already knows — over the part they opened it for. */
+    .hero--on { background:var(--card); }
+    .hero__top { display:flex; align-items:center; gap:8px; }
     .hero__badge {
-      width:46px; height:46px; border-radius:13px; display:grid; place-items:center;
-      background:var(--primary-weak); color:var(--primary); font-size:1.3rem;
+      width:9px; height:9px; border-radius:50%; flex:0 0 auto;
+      background:var(--faint);
     }
-    .hero--on .hero__badge { background:rgba(255,255,255,.2); color:#fff; }
-    .hero__state { font-size:1.5rem; font-weight:800; letter-spacing:-.02em; line-height:1.1; }
-    .hero__sub { font-size:.9rem; opacity:.82; margin-top:2px; }
+    .hero--on .hero__badge { background:var(--success); }
+    .hero__state {
+      font-size:.86rem; font-weight:700; letter-spacing:.01em; line-height:1.2;
+      color:var(--muted);
+    }
+    .hero--on .hero__state { color:var(--success); }
+    .hero__sub { font-size:.9rem; color:var(--muted); margin-top:12px; }
+    .hero--on .stat, .hero .stat { background:var(--card-2); }
     .stats { display:flex; gap:10px; margin-top:18px; }
     .stat { flex:1; border-radius:var(--radius-sm); padding:12px 14px; background:var(--card-2); }
     .hero--on .stat { background:rgba(255,255,255,.14); }
@@ -273,9 +282,9 @@
        is only meaningful if you can see which days it actually covers. */
     /* The number the screen exists to answer, at the size that means nobody
        has to work it out from a start time. */
-    .bigclock { display:flex; align-items:baseline; gap:8px; margin:14px 0 2px; }
-    .bigclock span:first-child { font-size:2.5rem; font-weight:800; letter-spacing:-.02em; line-height:1; font-variant-numeric:tabular-nums; }
-    .bigclock__lbl { font-size:.82rem; font-weight:600; opacity:.72; }
+    .bigclock { margin:10px 0 0; }
+    .bigclock span { font-size:3rem; font-weight:800; letter-spacing:-.03em; line-height:1; font-variant-numeric:tabular-nums; }
+    .bigclock__lbl { font-size:.85rem; color:var(--muted); margin-top:2px; }
     .rangerow { display:flex; align-items:center; gap:8px; margin:0 0 12px; }
     .rangenote { color:var(--faint); font-size:.74rem; }
     .rangerow .btn.link { margin-left:auto; font-size:.74rem; padding:2px 0; flex-shrink:0; }
@@ -560,13 +569,12 @@
       $('view').innerHTML = `
         <div class="hero ${on ? 'hero--on' : ''}">
           <div class="hero__top">
-            <div class="hero__badge">${ic(on ? 'check' : 'clock')}</div>
-            <div>
-              <div class="hero__state">${on ? 'On the clock' : 'Off the clock'}${on ? '<span class="pulse"></span>' : ''}</div>
-              <div class="hero__sub">${on && st.since ? `Since ${timeOf(st.since)}${esc(where)}` : 'Arriving at a work zone checks you in automatically'}</div>
-            </div>
+            <div class="hero__badge"></div>
+            <div class="hero__state">${on ? 'On the clock' : 'Off the clock'}</div>
           </div>
-          <div class="bigclock"><span id="meclock">${dur(baseMin)}</span><span class="bigclock__lbl">today</span></div>
+          <div class="bigclock"><span id="meclock">${dur(baseMin)}</span></div>
+          <div class="bigclock__lbl">today</div>
+          <div class="hero__sub">${on && st.since ? `Since ${timeOf(st.since)}${esc(where)}` : 'Arriving at a work zone checks you in automatically'}</div>
           ${t && (t.firstIn || t.lastOut) ? `<div class="stats">
             <div class="stat"><div class="stat__num num">${timeOf(t.firstIn)}</div><div class="stat__lbl">First in</div></div>
             <div class="stat"><div class="stat__num num">${t.lastOut ? timeOf(t.lastOut) : '—'}</div><div class="stat__lbl">Last out</div></div>
