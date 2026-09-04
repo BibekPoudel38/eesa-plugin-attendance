@@ -1115,9 +1115,24 @@
             cell.innerHTML = '<span class="muted" style="font-size:.8rem">Loading…</span>';
             try {
               const evs = await api('/api/admin/events?' + new URLSearchParams({ employeeRef: ref, from: day, to: day }));
+              // A hand-typed punch gets a way to undo it; a device punch does
+              // not, because the server will refuse and the button would only
+              // teach people that buttons lie. See db.deleteManualEvent.
               cell.innerHTML = evs.length
-                ? evs.slice().reverse().map(eventHtml).join('')
+                ? evs.slice().reverse().map((e) => eventHtml(e) + (e.source === 'manual'
+                    ? `<div style="margin:-6px 0 10px 34px"><button class="btn link" style="color:var(--danger);padding:0" data-del="${esc(e.id)}">Remove this entry</button></div>`
+                    : '')).join('')
                 : '<span class="muted" style="font-size:.8rem">No individual punches recorded for this day.</span>';
+              cell.querySelectorAll('[data-del]').forEach((db_) => {
+                db_.onclick = async () => {
+                  if (!confirm('Remove this hand-entered punch? The day\'s hours will be recalculated and the person will be told.')) return;
+                  try {
+                    await api('/api/admin/events/' + encodeURIComponent(db_.dataset.del), { method: 'DELETE' });
+                    toast('Entry removed');
+                    personTimesheet(ref, name);
+                  } catch (err) { toast(err.message, true); }
+                };
+              });
             } catch (e) {
               cell.innerHTML = `<span class="err" style="font-size:.8rem">${esc(e.message)}</span>`;
             }

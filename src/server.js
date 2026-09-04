@@ -672,6 +672,28 @@ app.post('/api/admin/manual-entry', manager, async (req, res) => {
 // row happens to hold (usually blank), so merge the tenant roster over it the
 // same way /admin/members does. Without this the report was a list of bare
 // employeeRef numbers with everyone quiet simply missing.
+// Undo a punch that was typed in by mistake. Manual entries only — see
+// db.deleteManualEvent for why a device punch is corrected rather than erased.
+app.delete('/api/admin/events/:id', manager, async (req, res) => {
+  const gone = await db.deleteManualEvent(req.ctx.tenantId, req.params.id);
+  if (!gone) {
+    return res.status(404).json({ ok: false, error: {
+      code: 'NOT_REMOVABLE',
+      message: 'That punch was recorded by a device, not entered by hand. Add a correcting punch instead.',
+    } });
+  }
+  // Tell the person whose timesheet just changed. Hours disappearing without a
+  // word is exactly the thing that makes people distrust an attendance system.
+  const { timezone } = await db.getTenantSettings(req.ctx.tenantId).catch(() => ({}));
+  notifyUser(req.ctx.tenantId, gone.employeeRef, {
+    title: 'A punch was removed',
+    body: `An admin removed a manually-entered ${gone.type === 'check_in' ? 'check-in' : 'check-out'} at ${clockAt(gone.at, timezone)}.`,
+    type: 'attendance_manual_removed',
+    data: { punch: gone.type, at: String(gone.at || '') },
+  });
+  res.json({ ok: true, data: gone });
+});
+
 app.get('/api/admin/report', manager, async (req, res) => {
   const tenantId = req.ctx.tenantId;
   const from = req.query.from || null;

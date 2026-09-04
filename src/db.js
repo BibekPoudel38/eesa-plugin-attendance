@@ -1418,6 +1418,32 @@ export async function setApproval(tenantId, employeeRef, day, status, approvedBy
 // Admin logs an event on a staff member's behalf (fallback / correction).
 // NOTE: recomputes today's summary; a back-dated entry to a prior day is stored
 // but that day's summary is recomputed lazily (v1 limitation).
+/// Remove a punch an admin entered by hand.
+///
+/// **Only `source = 'manual'`.** A device punch is evidence — it has a position,
+/// an accuracy and a time the phone stood behind — and the way to correct one is
+/// to add the punch that was missed, so the record still shows what happened and
+/// what was done about it. An admin's own typo has no such standing: nothing was
+/// observed, so there is nothing to preserve, and leaving it on someone's
+/// timesheet as a shift they never worked is worse than the gap it was meant to
+/// fill.
+///
+/// Returns the employee and day so the caller can tell them, and so the day's
+/// totals can be rebuilt — a deleted check-in that left `day_summaries` alone
+/// would keep paying out hours whose punch no longer exists.
+export async function deleteManualEvent(tenantId, eventId) {
+  const rows = await q(
+    `delete from events
+      where tenant_id = $1 and id = $2 and source = 'manual'
+      returning employee_ref, type, at`,
+    [tenantId, eventId],
+  );
+  if (!rows.length) return null;
+  const employeeRef = String(rows[0].employee_ref);
+  await upsertDaySummary(tenantId, employeeRef);
+  return { employeeRef, type: rows[0].type, at: iso(rows[0].at) };
+}
+
 export async function manualEntry(tenantId, employeeRef, type, at = null) {
   const t = type === 'check_out' ? 'check_out' : 'check_in';
   await q(
