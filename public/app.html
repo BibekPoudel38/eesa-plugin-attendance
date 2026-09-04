@@ -11,41 +11,47 @@
            (data-theme="dark") or, before the host message arrives, when the OS
            prefers dark. The host (Flutter/React) sends the phone's theme over
            the postMessage bridge, so the plugin always matches the app. ---- */
+    /* ---- Eesa's own palette, value for value.
+       These are not "a teal that goes with Eesa" — they are the exact tokens
+       from the app's AppColors, so the plugin embedded in the Eesa shell is the
+       same colour as the screen it opened from. Eesa's brand accent is PURPLE
+       (#5B2BD6 light / #9C6BF5 dark); this UI had been painting itself teal,
+       which is why it read as somebody else's app. ---- */
     :root {
       color-scheme: light dark;
-      --bg:#eef3f4;
-      --grad: radial-gradient(1100px 460px at 50% -160px, rgba(15,139,150,.14), transparent 72%);
-      --card:#ffffff; --card-2:#eef3f5; --line:#e0e9eb;
-      --ink:#0d1d23; --muted:#5f7480; --faint:#8fa2ab;
-      --primary:#0f8b96; --primary-ink:#fff; --primary-weak:rgba(15,139,150,.12);
-      --success:#159a63; --success-weak:rgba(21,154,99,.14);
-      --warn:#b9820f; --warn-weak:rgba(185,130,15,.16);
-      --danger:#d24b38; --danger-weak:rgba(210,75,56,.14);
-      --shadow:0 1px 2px rgba(16,40,48,.05), 0 10px 30px rgba(16,40,48,.07);
+      --bg:#FCFCFC;
+      --grad: radial-gradient(1100px 460px at 50% -160px, rgba(91,43,214,.10), transparent 72%);
+      --card:#FFFFFF; --card-2:#F2F6F8; --line:#E2E5E8;
+      --ink:#090E12; --muted:#5D646A; --faint:#8A9197;
+      --primary:#5B2BD6; --primary-ink:#FCFCFC; --primary-weak:rgba(91,43,214,.10);
+      --success:#00A461; --success-weak:rgba(0,164,97,.13);
+      --warn:#E68D00; --warn-weak:rgba(230,141,0,.15);
+      --danger:#DF2225; --danger-weak:rgba(223,34,37,.12);
+      --shadow:0 1px 2px rgba(9,14,18,.05), 0 10px 30px rgba(9,14,18,.06);
       --radius:16px; --radius-sm:11px;
     }
     @media (prefers-color-scheme: dark) {
       :root:not([data-theme="light"]) {
-        --bg:#0c161b;
-        --grad: radial-gradient(1100px 460px at 50% -160px, rgba(45,180,190,.16), transparent 72%);
-        --card:#14232b; --card-2:#0f1d24; --line:#233a44;
-        --ink:#e9f3f4; --muted:#8fa8b1; --faint:#5f7783;
-        --primary:#2db4be; --primary-ink:#04222a; --primary-weak:rgba(45,180,190,.16);
-        --success:#4fd08a; --success-weak:rgba(79,208,138,.16);
-        --warn:#e6c15e; --warn-weak:rgba(230,193,94,.16);
-        --danger:#e0705e; --danger-weak:rgba(224,112,94,.16);
+        --bg:#090D0F;
+        --grad: radial-gradient(1100px 460px at 50% -160px, rgba(156,107,245,.14), transparent 72%);
+        --card:#121518; --card-2:#181C1F; --line:#1F2326;
+        --ink:#F3F5F7; --muted:#8C9399; --faint:#6B7278;
+        --primary:#9C6BF5; --primary-ink:#05080B; --primary-weak:rgba(156,107,245,.16);
+        --success:#00BD79; --success-weak:rgba(0,189,121,.16);
+        --warn:#FBA100; --warn-weak:rgba(251,161,0,.16);
+        --danger:#DF2225; --danger-weak:rgba(223,34,37,.18);
         --shadow:0 1px 2px rgba(0,0,0,.3), 0 12px 34px rgba(0,0,0,.34);
       }
     }
     :root[data-theme="dark"] {
-      --bg:#0c161b;
-      --grad: radial-gradient(1100px 460px at 50% -160px, rgba(45,180,190,.16), transparent 72%);
-      --card:#14232b; --card-2:#0f1d24; --line:#233a44;
-      --ink:#e9f3f4; --muted:#8fa8b1; --faint:#5f7783;
-      --primary:#2db4be; --primary-ink:#04222a; --primary-weak:rgba(45,180,190,.16);
-      --success:#4fd08a; --success-weak:rgba(79,208,138,.16);
-      --warn:#e6c15e; --warn-weak:rgba(230,193,94,.16);
-      --danger:#e0705e; --danger-weak:rgba(224,112,94,.16);
+      --bg:#090D0F;
+      --grad: radial-gradient(1100px 460px at 50% -160px, rgba(156,107,245,.14), transparent 72%);
+      --card:#121518; --card-2:#181C1F; --line:#1F2326;
+      --ink:#F3F5F7; --muted:#8C9399; --faint:#6B7278;
+      --primary:#9C6BF5; --primary-ink:#05080B; --primary-weak:rgba(156,107,245,.16);
+      --success:#00BD79; --success-weak:rgba(0,189,121,.16);
+      --warn:#FBA100; --warn-weak:rgba(251,161,0,.16);
+      --danger:#DF2225; --danger-weak:rgba(223,34,37,.18);
       --shadow:0 1px 2px rgba(0,0,0,.3), 0 12px 34px rgba(0,0,0,.34);
     }
 
@@ -117,7 +123,7 @@
       padding:22px; margin-bottom:14px; border:1px solid var(--line);
       background:var(--card); box-shadow:var(--shadow);
     }
-    .hero--on { background:linear-gradient(135deg,#12a06a,#0f8b96 92%); color:#fff; border-color:transparent; }
+    .hero--on { background:linear-gradient(135deg,#00A461,#00875A 92%); color:#fff; border-color:transparent; }
     .hero__top { display:flex; align-items:center; gap:12px; }
     .hero__badge {
       width:46px; height:46px; border-radius:13px; display:grid; place-items:center;
@@ -219,6 +225,9 @@
     .card.needs { border-color:var(--warn); box-shadow:0 0 0 1px var(--warn-weak) inset, var(--shadow); }
     .confirmrow { align-items:center; }
     .confirmbtns { display:flex; gap:6px; flex-shrink:0; }
+    /* Two words on one line. "Not here" breaking after "Not" made the pair of
+       buttons different heights and the row read as broken. */
+    .confirmbtns .btn { white-space:nowrap; }
     @media (max-width:420px) {
       .confirmrow { flex-wrap:wrap; }
       .confirmbtns { width:100%; margin-top:8px; }
@@ -262,6 +271,11 @@
     .periods button:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
     /* The chosen period's own dates, shown small under the control: "This month"
        is only meaningful if you can see which days it actually covers. */
+    /* The number the screen exists to answer, at the size that means nobody
+       has to work it out from a start time. */
+    .bigclock { display:flex; align-items:baseline; gap:8px; margin:14px 0 2px; }
+    .bigclock span:first-child { font-size:2.5rem; font-weight:800; letter-spacing:-.02em; line-height:1; font-variant-numeric:tabular-nums; }
+    .bigclock__lbl { font-size:.82rem; font-weight:600; opacity:.72; }
     .rangerow { display:flex; align-items:center; gap:8px; margin:0 0 12px; }
     .rangenote { color:var(--faint); font-size:.74rem; }
     .rangerow .btn.link { margin-left:auto; font-size:.74rem; padding:2px 0; flex-shrink:0; }
@@ -298,7 +312,7 @@
   <div class="toast" id="toast"></div>
 
   <script>
-    let TOKEN = null, CTX = null, TAB = null;
+    let TOKEN = null, CTX = null, TAB = null, ME_TICK = null;
     const $ = (id) => document.getElementById(id);
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
     const hrs = (m) => (Number(m || 0) / 60).toFixed(1);
@@ -422,6 +436,10 @@
       inbox: '<path d="M4 13l2.5-8h11L20 13"/><path d="M4 13h5l1 2h4l1-2h5v6H4z"/>',
       briefcase: '<rect x="3" y="7.5" width="18" height="13" rx="2"/><path d="M9 7.5V5.5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/><path d="M3 12.5h18"/>',
     };
+    // Read the live accent so map overlays follow the theme rather than
+    // hard-coding a colour that only suits one of them.
+    const ZONE_RING = getComputedStyle(document.documentElement)
+      .getPropertyValue('--primary').trim() || '#5B2BD6';
     const ic = (n) => `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[n] || ICONS.clock}</svg>`;
     const empty = (icon, msg) => `<div class="empty">${ic(icon)}${esc(msg)}</div>`;
 
@@ -513,20 +531,26 @@
       const t = (st && st.today) || null;
       const evs = (st && st.events) || [];
       const where = on && st.zoneName ? ` at ${st.zoneName}` : '';
+      // The order is the order the questions get asked: am I on the clock, for
+      // how long, did today record correctly, and where does this even apply.
+      // Hours-worked is the headline because it is the number people open this
+      // for; first-in and last-out are the supporting detail, not the lead.
+      const baseMin = Number((st && st.todayMinutes) || 0);
+      const readAt = Date.now();
       $('view').innerHTML = `
         <div class="hero ${on ? 'hero--on' : ''}">
           <div class="hero__top">
             <div class="hero__badge">${ic(on ? 'check' : 'clock')}</div>
             <div>
-              <div class="hero__state">${on ? 'Checked in' : 'Not checked in'}${on ? '<span class="pulse"></span>' : ''}</div>
-              <div class="hero__sub">${on && st.since ? `On the clock${esc(where)} since ${timeOf(st.since)}` : 'You’re currently off the clock'}</div>
+              <div class="hero__state">${on ? 'On the clock' : 'Off the clock'}${on ? '<span class="pulse"></span>' : ''}</div>
+              <div class="hero__sub">${on && st.since ? `Since ${timeOf(st.since)}${esc(where)}` : 'Arriving at a work zone checks you in automatically'}</div>
             </div>
           </div>
-          <div class="stats">
-            <div class="stat"><div class="stat__num num">${hrs(st && st.todayMinutes)}<span style="font-size:.8rem;font-weight:600"> h</span></div><div class="stat__lbl">Today</div></div>
-            <div class="stat"><div class="stat__num num">${t ? timeOf(t.firstIn) : '—'}</div><div class="stat__lbl">First in</div></div>
-            <div class="stat"><div class="stat__num num">${t && t.lastOut ? timeOf(t.lastOut) : '—'}</div><div class="stat__lbl">Last out</div></div>
-          </div>
+          <div class="bigclock"><span id="meclock">${dur(baseMin)}</span><span class="bigclock__lbl">today</span></div>
+          ${t && (t.firstIn || t.lastOut) ? `<div class="stats">
+            <div class="stat"><div class="stat__num num">${timeOf(t.firstIn)}</div><div class="stat__lbl">First in</div></div>
+            <div class="stat"><div class="stat__num num">${t.lastOut ? timeOf(t.lastOut) : '—'}</div><div class="stat__lbl">Last out</div></div>
+          </div>` : ''}
         </div>
         <div class="card">
           <h2>${ic('history')} Today’s punches</h2>
@@ -536,10 +560,26 @@
         <div class="card">
           <h2>${ic('pin')} Your work zones</h2>
           ${zones.length
-            ? `<div class="chips">${zones.map((z) => `<span class="chip">${ic('pin')}${esc(z.name)} <span class="muted num">· ${Math.round(z.radiusM)} m</span></span>`).join('')}</div>`
-            : empty('pin', 'No work zones assigned yet.')}
-          <p class="muted" style="font-size:.78rem;margin:14px 0 0">Check-in and check-out happen automatically when you arrive at and leave a zone — from the Eesa app on your phone.</p>
+            ? `<div class="chips">${zones.map((z) => `<span class="chip">${ic('pin')}${esc(z.name)}</span>`).join('')}</div>`
+            : empty('pin', 'No work zones assigned yet — ask an admin to add one.')}
+          <p class="muted" style="font-size:.78rem;margin:14px 0 0">Check-in and check-out happen automatically when you arrive at and leave a zone, from the Eesa app on your phone. You do not need to open anything.</p>
         </div>`;
+
+      // Keep the clock honest while the page is open.
+      //
+      // The server already counted the open shift up to the moment it answered,
+      // so the only correction is the time since — not a re-derivation from
+      // `since`, which would double-count every earlier shift on a day with
+      // more than one. Only runs while actually on the clock, and only while
+      // this view is the one on screen.
+      clearInterval(ME_TICK);
+      if (on) {
+        ME_TICK = setInterval(() => {
+          const el = $('meclock');
+          if (!el || TAB !== 'me') { clearInterval(ME_TICK); return; }
+          el.textContent = dur(baseMin + Math.floor((Date.now() - readAt) / 60000));
+        }, 20000);
+      }
     };
 
     VIEWS.history = async () => {
@@ -1485,7 +1525,7 @@
         const r = radiusVal();
         if (!pin) {
           pin = L.marker(latlng, { draggable: true, icon: pinIcon }).addTo(map);
-          ring = L.circle(latlng, { radius: r, color: '#2db4be', weight: 2, fillColor: '#2db4be', fillOpacity: .12 }).addTo(map);
+          ring = L.circle(latlng, { radius: r, color: ZONE_RING, weight: 2, fillColor: ZONE_RING, fillOpacity: .12 }).addTo(map);
           handle = L.marker(eastEdge(latlng, r), { draggable: true, icon: handleIcon }).addTo(map);
           pin.on('drag', () => { const c = pin.getLatLng(); ring.setLatLng(c); handle.setLatLng(eastEdge(c, ring.getRadius())); syncInputs(); });
           handle.on('drag', () => { const nr = Math.max(10, Math.round(pin.getLatLng().distanceTo(handle.getLatLng()))); ring.setRadius(nr); $('zr').value = nr; });
