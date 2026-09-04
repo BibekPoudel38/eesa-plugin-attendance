@@ -199,7 +199,7 @@
 
     .pill { display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border-radius:999px; font-size:.72rem; font-weight:700; text-transform:capitalize; }
     .pill.pending, .pill.incomplete { background:var(--warn-weak); color:var(--warn); }
-    .pill.open { background:var(--success-weak); color:var(--success); }
+    .pill.open { background:var(--success-weak); color:var(--success); text-transform:none; }
     .pill.approved, .pill.complete { background:var(--success-weak); color:var(--success); }
     .pill.rejected { background:var(--danger-weak); color:var(--danger); }
 
@@ -649,7 +649,7 @@
               <div class="lead-ic">${ic('calendar')}</div>
               <div class="grow">
                 <div style="font-weight:650">${esc(dateNice(r.date))}</div>
-                <div class="muted" style="font-size:.78rem">${timeOf(r.firstIn)} → ${r.lastOut ? timeOf(r.lastOut) : 'open'}</div>
+                <div class="muted" style="font-size:.78rem">${timeOf(r.firstIn)} → ${r.lastOut ? timeOf(r.lastOut) : 'still open'}</div>
                 <div style="margin-top:4px">${vbadge(r.verification)}${cbadge(r.confirmStatus)}</div>
               </div>
               <div style="text-align:right">
