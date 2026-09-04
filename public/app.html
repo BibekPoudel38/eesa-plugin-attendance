@@ -1123,14 +1123,41 @@
                     ? `<div style="margin:-6px 0 10px 34px"><button class="btn link" style="color:var(--danger);padding:0" data-del="${esc(e.id)}">Remove this entry</button></div>`
                     : '')).join('')
                 : '<span class="muted" style="font-size:.8rem">No individual punches recorded for this day.</span>';
-              cell.querySelectorAll('[data-del]').forEach((db_) => {
-                db_.onclick = async () => {
-                  if (!confirm('Remove this hand-entered punch? The day\'s hours will be recalculated and the person will be told.')) return;
+              // Confirm in the page, not with window.confirm().
+              //
+              // This UI runs inside the app's WKWebView, which suppresses native
+              // JS dialogs unless the host implements onJsConfirm — the plugin
+              // webview does not. confirm() therefore returned false every time
+              // and the button silently did nothing, which is the worst possible
+              // failure for a destructive control: it looks broken, so people
+              // press it again.
+              //
+              // Two taps on the same button is also simply better here. It keeps
+              // the decision where the thing being deleted is, needs no modal,
+              // and reverts on its own if the second tap never comes.
+              cell.querySelectorAll('[data-del]').forEach((btn) => {
+                let armed = null;
+                const disarm = () => {
+                  clearTimeout(armed);
+                  armed = null;
+                  btn.textContent = 'Remove this entry';
+                };
+                btn.onclick = async () => {
+                  if (!armed) {
+                    btn.textContent = 'Tap again to remove';
+                    armed = setTimeout(disarm, 4000);
+                    return;
+                  }
+                  disarm();
+                  btn.disabled = true;
                   try {
-                    await api('/api/admin/events/' + encodeURIComponent(db_.dataset.del), { method: 'DELETE' });
+                    await api('/api/admin/events/' + encodeURIComponent(btn.dataset.del), { method: 'DELETE' });
                     toast('Entry removed');
                     personTimesheet(ref, name);
-                  } catch (err) { toast(err.message, true); }
+                  } catch (err) {
+                    btn.disabled = false;
+                    toast(err.message, true);
+                  }
                 };
               });
             } catch (e) {
