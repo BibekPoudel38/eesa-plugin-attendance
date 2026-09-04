@@ -242,16 +242,33 @@ async function managerAudience(tenantId) {
   return db.managerRefs(tenantId).catch(() => []);
 }
 
-/// Whether this shift needs someone else to vouch for it.
+/// Punches a DEVICE observed, as opposed to ones a person asserted.
 ///
-/// False for an admin's own arrival — they are the authority the question would
-/// be put to — and false when there is no OTHER admin to ask, since a question
-/// with nobody to answer it only ever resolves to an alert nobody could have
-/// prevented.
-async function shouldConfirm(tenantId, employeeRef) {
+/// A geofence crossing and an NFC tag are things that happened to the phone: it
+/// was at a boundary, or it was held against a tag someone mounted on a wall.
+/// A button in the app is a claim — the location is still verified against the
+/// zone, but the decision to record a shift was the person's own.
+const OBSERVED_SOURCES = new Set(['geofence', 'nfc']);
+
+/// Whether this shift needs someone ELSE to vouch for it.
+///
+/// Three rules, in order:
+///
+///   * Nobody else to ask → no. A question with no possible answer only ever
+///     becomes an alert nobody could have prevented.
+///   * The person tapped it themselves → yes, always, admin or not. This is the
+///     one case where location cannot help: it proves the phone was at the
+///     zone, never that the person holding it was the one on the rota, and
+///     exempting the authority here would exempt exactly the person whose own
+///     claim nobody is checking.
+///   * The fence recorded it → an admin is the authority the question would be
+///     put to, so theirs stands on its own. Everyone else's is confirmed.
+async function shouldConfirm(tenantId, employeeRef, source) {
   const managers = await managerAudience(tenantId);
-  if (managers.some((r) => String(r) === String(employeeRef))) return false;
-  return managers.length > 0;
+  const others = managers.filter((r) => String(r) !== String(employeeRef));
+  if (others.length === 0) return false;
+  if (!OBSERVED_SOURCES.has(String(source || 'geofence'))) return true;
+  return !managers.some((r) => String(r) === String(employeeRef));
 }
 
 // ---- Punch notifications ---------------------------------------------------
@@ -416,7 +433,7 @@ app.post('/api/checkIn', emp, async (req, res) => {
   // manager's own arrival and a roster with no other manager on it.
   const needsConfirm = Boolean(requireConfirmation)
     && forWork !== false
-    && await shouldConfirm(req.ctx.tenantId, req.ctx.sub).catch(() => false);
+    && await shouldConfirm(req.ctx.tenantId, req.ctx.sub, source).catch(() => false);
   const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', {
     zoneId, lat, lng, accuracyM, forWork, source, workType,
     requireConfirm: needsConfirm,
