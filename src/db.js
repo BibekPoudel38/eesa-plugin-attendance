@@ -489,6 +489,13 @@ export async function myStatus(tenantId, employeeRef) {
       }
     : null;
   return {
+    // The workplace's own clock.
+    //
+    // Every timestamp here is an instant in UTC, and the phone rendering it
+    // has been using its OWN zone — so a handset brought from India showed an
+    // 08:01 arrival at the restaurant as 20:31. The DAY is already decided in
+    // tenant time on this side; the hour has to agree with it.
+    timezone: tz,
     checkedIn: t.checkedIn,
     since: iso(t.since),
     zoneId: t.zoneId,

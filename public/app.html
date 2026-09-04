@@ -335,7 +335,22 @@
       const h = Math.floor(n / 60), r = n % 60;
       return r ? `${h}h ${r}m` : `${h}h`;
     };
-    const timeOf = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+    // The workplace's clock, not the browser's.
+    //
+    // Every timestamp here is an instant in UTC, and the day it belongs to was
+    // decided on the server in the tenant's zone — so rendering the hour in
+    // whatever zone the phone happens to be set to can show a shift at a time
+    // belonging to a different day. A handset brought from India displayed an
+    // 08:01 arrival in Anaheim as 20:31.
+    //
+    // TZ is set from the workspace settings once they load; until then the
+    // browser's own zone is the best guess available.
+    let TZ = null;
+    const timeOf = (iso) => iso
+      ? new Date(iso).toLocaleTimeString([], {
+          hour: '2-digit', minute: '2-digit', ...(TZ ? { timeZone: TZ } : {}),
+        })
+      : '—';
     const dateNice = (s) => { if (!s) return '—'; const d = new Date(s + 'T00:00:00'); return isNaN(d) ? s : d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }); };
     const today = () => new Date().toISOString().slice(0, 10);
     const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
@@ -556,6 +571,9 @@
     VIEWS.me = async () => {
       let st = null, zones = [];
       try { st = await api('/api/getMyStatus'); } catch (e) { throw new Error('Could not load your status: ' + e.message); }
+      // Every status response carries the workplace zone; adopt it before a
+      // single time is rendered.
+      if (st && st.timezone) TZ = st.timezone;
       try { zones = await api('/api/getMyZones'); } catch (_) { zones = []; }
       const on = !!(st && st.checkedIn);
       const t = (st && st.today) || null;
