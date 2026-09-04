@@ -214,6 +214,46 @@ app.get('/api/present', async (req, res) => {
   res.json({ ok: true, data: { present: await db.presentToday(ctx.tenantId) } });
 });
 
+// ---- Who counts as a manager ----------------------------------------------
+
+/// The people whose word settles whether someone was on site.
+///
+/// Read from the Eesa ROSTER (`attendanceRole === 'admin'`), not from the
+/// plugin's own memberships table. Membership.role is legacy — /api/me says so
+/// itself ("appRole (Eesa authority) decides access; the membership row is kept
+/// only for pay_rate/work_types and no longer drives role") — and on the live
+/// workspace it disagrees badly: the only row marked 'manager' is a dormant
+/// Apple review account, while the three actual admins are all 'staff' there.
+/// Trusting it sent every "Is X here?" to an account nobody reads, and held the
+/// admins' own shifts for a confirmation they were the ones meant to give.
+///
+/// Falls back to memberships only when the roster cannot be reached, because a
+/// stale audience is better than none.
+async function managerAudience(tenantId) {
+  try {
+    const roster = await fetchRoster(tenantId);
+    const admins = roster
+      .filter((u) => String(u.attendanceRole || '').toLowerCase() === 'admin')
+      .map((u) => String(u.id));
+    if (admins.length) return admins;
+  } catch {
+    /* fall through */
+  }
+  return db.managerRefs(tenantId).catch(() => []);
+}
+
+/// Whether this shift needs someone else to vouch for it.
+///
+/// False for an admin's own arrival — they are the authority the question would
+/// be put to — and false when there is no OTHER admin to ask, since a question
+/// with nobody to answer it only ever resolves to an alert nobody could have
+/// prevented.
+async function shouldConfirm(tenantId, employeeRef) {
+  const managers = await managerAudience(tenantId);
+  if (managers.some((r) => String(r) === String(employeeRef))) return false;
+  return managers.length > 0;
+}
+
 // ---- Punch notifications ---------------------------------------------------
 
 /// Clock time in the tenant's own timezone, as a person writes it.
@@ -278,7 +318,7 @@ async function announcePunch(tenantId, employeeRef, type, status) {
     const unverified = status.verification && status.verification !== 'verified';
     if (managerNotify === 'exceptions' && !unverified) return;
 
-    const managers = (await db.managerRefs(tenantId)).filter((r) => r !== employeeRef);
+    const managers = (await managerAudience(tenantId)).filter((r) => String(r) !== String(employeeRef));
     if (!managers.length) return;
     const who = await db.displayName(tenantId, employeeRef);
     notifyUsers(tenantId, managers, {
@@ -305,7 +345,7 @@ async function announcePunch(tenantId, employeeRef, type, status) {
 /// loud gap when nobody did.
 async function askManagersToConfirm(tenantId, employeeRef, ev, status) {
   try {
-    const managers = (await db.managerRefs(tenantId)).filter((r) => r !== employeeRef);
+    const managers = (await managerAudience(tenantId)).filter((r) => String(r) !== String(employeeRef));
     if (!managers.length) return;
     const { timezone } = await db.getTenantSettings(tenantId);
     const who = await db.displayName(tenantId, employeeRef);
@@ -342,7 +382,7 @@ async function flagUnconfirmedShift(tenantId, employeeRef, checkIn, status) {
       data: { minutes: String((status.today && status.today.totalMinutes) || 0), at },
     });
 
-    const managers = (await db.managerRefs(tenantId)).filter((r) => r !== employeeRef);
+    const managers = (await managerAudience(tenantId)).filter((r) => String(r) !== String(employeeRef));
     if (!managers.length) return;
     notifyUsers(tenantId, managers, {
       title: `${who} clocked ${worked} — unconfirmed`,
@@ -368,7 +408,7 @@ app.post('/api/checkIn', emp, async (req, res) => {
   // manager's own arrival and a roster with no other manager on it.
   const needsConfirm = Boolean(requireConfirmation)
     && forWork !== false
-    && await db.needsConfirmation(req.ctx.tenantId, req.ctx.sub).catch(() => false);
+    && await shouldConfirm(req.ctx.tenantId, req.ctx.sub).catch(() => false);
   const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', {
     zoneId, lat, lng, accuracyM, forWork, source, workType,
     requireConfirm: needsConfirm,
