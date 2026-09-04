@@ -11,6 +11,7 @@ import { authMiddleware, verifyToken, requireGateway } from './auth.js';
 import * as db from './db.js';
 import { handleRpc } from './mcp.js';
 import { fetchRoster, rosterHealth } from './roster.js';
+import { nameMapOf, withNames } from './names.js';
 import { notifyUser, notifyUsers } from './notify.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -242,6 +243,38 @@ async function managerAudience(tenantId) {
   return db.managerRefs(tenantId).catch(() => []);
 }
 
+/// Names, from the source that actually knows them.
+///
+/// Cached for a few minutes: this decorates list endpoints a manager reloads
+/// constantly, and a name does not change between two taps.
+const _nameCache = new Map();
+const NAME_TTL_MS = 5 * 60 * 1000;
+
+async function nameIndex(tenantId) {
+  const hit = _nameCache.get(tenantId);
+  if (hit && Date.now() - hit.at < NAME_TTL_MS) return hit.byRef;
+  let byRef = new Map();
+  try {
+    byRef = nameMapOf(await fetchRoster(tenantId));
+  } catch {
+    // Roster unreachable — fall back to whatever memberships had, which is
+    // exactly the behaviour that existed before this.
+  }
+  _nameCache.set(tenantId, { at: Date.now(), byRef });
+  return byRef;
+}
+
+/// One person's name, for a sentence a colleague is going to read.
+///
+/// Same problem as the lists: a notification saying "A team member checked in"
+/// is no use to the manager deciding whether to walk over and look.
+async function personName(tenantId, employeeRef) {
+  const own = await db.displayName(tenantId, employeeRef).catch(() => '');
+  if (own && own !== 'A team member') return own;
+  const byRef = await nameIndex(tenantId).catch(() => new Map());
+  return byRef.get(String(employeeRef)) || 'A team member';
+}
+
 /// Punches a DEVICE observed, as opposed to ones a person asserted.
 ///
 /// A geofence crossing and an NFC tag are things that happened to the phone: it
@@ -337,7 +370,7 @@ async function announcePunch(tenantId, employeeRef, type, status) {
 
     const managers = (await managerAudience(tenantId)).filter((r) => String(r) !== String(employeeRef));
     if (!managers.length) return;
-    const who = await db.displayName(tenantId, employeeRef);
+    const who = await personName(tenantId, employeeRef);
     notifyUsers(tenantId, managers, {
       title: unverified
         ? `${who} — unconfirmed ${isIn ? 'check-in' : 'check-out'}`
@@ -365,7 +398,7 @@ async function askManagersToConfirm(tenantId, employeeRef, ev, status) {
     const managers = (await managerAudience(tenantId)).filter((r) => String(r) !== String(employeeRef));
     if (!managers.length) return;
     const { timezone } = await db.getTenantSettings(tenantId);
-    const who = await db.displayName(tenantId, employeeRef);
+    const who = await personName(tenantId, employeeRef);
     const at = clockAt(ev.at || new Date(), timezone);
     const where = status.zoneName ? ` at ${status.zoneName}` : '';
     notifyUsers(tenantId, managers, {
@@ -390,7 +423,7 @@ async function flagUnconfirmedShift(tenantId, employeeRef, checkIn, status) {
     const { timezone } = await db.getTenantSettings(tenantId);
     const worked = spanOf(status.today && status.today.totalMinutes);
     const at = clockAt(checkIn.at, timezone);
-    const who = await db.displayName(tenantId, employeeRef);
+    const who = await personName(tenantId, employeeRef);
 
     notifyUser(tenantId, employeeRef, {
       title: `${worked} recorded, not confirmed`,
@@ -588,8 +621,13 @@ app.delete('/api/admin/zones/:id', manager, async (req, res) =>
 // roster over the top exactly as /admin/members does — a table of bare numeric
 // employeeRefs is unreadable to the admin who has to act on it.
 // Who is waiting on you right now. The whole point of the Today screen.
-app.get('/api/admin/confirmations', manager, async (req, res) =>
-  res.json({ ok: true, data: await db.pendingConfirmations(req.ctx.tenantId) }));
+app.get('/api/admin/confirmations', manager, async (req, res) => {
+  const [rows, names] = await Promise.all([
+    db.pendingConfirmations(req.ctx.tenantId),
+    nameIndex(req.ctx.tenantId),
+  ]);
+  res.json({ ok: true, data: withNames(rows, names) });
+});
 
 // "Yes, they're here" / "No, they aren't."
 app.post('/api/admin/confirm', manager, async (req, res) => {
@@ -651,10 +689,15 @@ app.get('/api/admin/events', manager, async (req, res) => {
 });
 
 // Approvals: the manager reviews day summaries and approves/rejects them.
-app.get('/api/admin/approvals', manager, async (req, res) =>
-  res.json({ ok: true, data: await db.listApprovals(req.ctx.tenantId, {
-    from: req.query.from || null, to: req.query.to || null, status: req.query.status || null,
-  }) }));
+app.get('/api/admin/approvals', manager, async (req, res) => {
+  const [rows, names] = await Promise.all([
+    db.listApprovals(req.ctx.tenantId, {
+      from: req.query.from || null, to: req.query.to || null, status: req.query.status || null,
+    }),
+    nameIndex(req.ctx.tenantId),
+  ]);
+  res.json({ ok: true, data: withNames(rows, names) });
+});
 app.post('/api/admin/approvals', manager, async (req, res) => {
   const { employeeRef, day, status = 'approved' } = req.body || {};
   if (!employeeRef || !day) return res.status(400).json({ ok: false, error: 'employeeRef and day required' });
