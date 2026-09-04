@@ -388,7 +388,15 @@ async function flagUnconfirmedShift(tenantId, employeeRef, checkIn, status) {
       title: `${who} clocked ${worked} — unconfirmed`,
       body: `Checked in at ${at} and has now left. Nobody confirmed they were there.`,
       type: 'attendance_unconfirmed',
-      data: { employeeRef: String(employeeRef), minutes: String((status.today && status.today.totalMinutes) || 0), at },
+      data: {
+        employeeRef: String(employeeRef),
+        minutes: String((status.today && status.today.totalMinutes) || 0),
+        at,
+        // The Approve button on this notification signs off a DAY, so the day
+        // has to travel with it. Without this the button draws, is tapped, and
+        // silently does nothing — worse than not offering it.
+        day: (status.today && status.today.date) || '',
+      },
     });
   } catch (e) {
     console.error('[attendance] unconfirmed-shift alert failed:', e && e.message);
