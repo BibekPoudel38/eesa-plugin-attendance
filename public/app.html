@@ -706,10 +706,18 @@
           ? dateNice(RANGE.from)
           : `${dateNice(RANGE.from)} → ${dateNice(RANGE.to)}`;
       };
+      // Repaint on EVERY change, not just at setup.
+      //
+      // This was the bug that made the whole control look dead: a tap set RANGE
+      // and refetched, but nothing called paint() again — so the highlight and
+      // the date line stayed on the period you had just left while the numbers
+      // underneath quietly changed. Tapping "Week" looked like tapping nothing.
+      const apply = () => { paint(); onApply(); };
+
       chips.querySelectorAll('button').forEach((b) => {
         b.onclick = () => {
           [RANGE.from, RANGE.to] = PERIODS[b.dataset.p].range();
-          onApply();
+          apply();
         };
       });
       pick.onclick = () => {
@@ -726,7 +734,7 @@
         // like a mistake, so swap it instead of reporting an empty period.
         RANGE.from = f <= t ? f : t;
         RANGE.to = f <= t ? t : f;
-        onApply();
+        apply();
       };
       paint();
     };

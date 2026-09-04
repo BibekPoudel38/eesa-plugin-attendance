@@ -759,7 +759,16 @@ app.delete('/api/admin/nfc-tags/:id', manager, async (req, res) =>
   res.json({ ok: true, data: await db.removeNfcTag(req.ctx.tenantId, req.params.id) }));
 
 // ---- Embedded UI: static shell + a context endpoint (UI session token) ----
-app.get('/app', (req, res) => res.sendFile(join(__dirname, '..', 'public', 'app.html')));
+// Never let a webview keep yesterday's screen.
+//
+// This page IS the deploy — there is no build step and no hashed filename, so a
+// cached copy means a fix that is live on the server is invisible on the phone,
+// and the person looking at it reports the old bug as still broken. must-revalidate
+// costs one conditional request per open and removes that whole class of ghost.
+app.get('/app', (req, res) => {
+  res.set('Cache-Control', 'no-cache, must-revalidate');
+  res.sendFile(join(__dirname, '..', 'public', 'app.html'));
+});
 app.get('/api/ui/context', authMiddleware({ surface: 'ui' }), async (req, res) => {
   const member = await db.getMembership(req.ctx.tenantId, req.ctx.sub);
   const admin = isPlatformAdmin(req.ctx);
