@@ -577,15 +577,37 @@ export async function myHistory(tenantId, employeeRef, days = 7, { from = null, 
   const [vi, ci] = window
     ? await Promise.all([verificationIndex(tenantId, window), confirmationIndex(tenantId, window)])
     : [new Map(), new Map()];
+
+  // A shift that has not ended yet.
+  //
+  // `day_summaries` is only rewritten when a punch lands, so a day whose
+  // check-in was its last punch is frozen at the total it had a second after
+  // arriving — zero. Printed as-is, the running shift reads "0.0 h" on the row,
+  // "0 days worked" in the tile above it and "29m" on the card above that:
+  // three numbers for one shift, and the smallest of them next to the word
+  // "Incomplete". So today is recounted from its punches, exactly as the status
+  // endpoint does, and the two can never disagree.
+  //
+  // Only for the person's own history, and only for today. The admin timesheet
+  // deliberately keeps the stored figure: approving and paying a day that is
+  // still running would freeze a number that was never the day's total.
+  const tz = await tenantTz(tenantId);
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: tz });
+  const live = dates.includes(todayStr)
+    ? computeToday(await todaysEvents(tenantId, employeeRef))
+    : null;
+  const running = live && live.checkedIn ? live : null;
+
   return {
     days: rows.map((r) => {
       const date = dayStr(r.day);
+      const now = running && date === todayStr ? running : null;
       return {
         date,
-        totalMinutes: Number(r.total_minutes || 0),
+        totalMinutes: now ? now.totalMinutes : Number(r.total_minutes || 0),
         firstIn: iso(r.first_in),
         lastOut: iso(r.last_out),
-        status: r.last_out ? 'complete' : r.first_in ? 'incomplete' : 'open',
+        status: now ? 'open' : r.last_out ? 'complete' : r.first_in ? 'incomplete' : 'open',
         // null when confirmation never applied to this day (a manager's own
         // shift, or a workspace with the setting off) — deliberately different
         // from 'unconfirmed', which means it was asked and never answered.
