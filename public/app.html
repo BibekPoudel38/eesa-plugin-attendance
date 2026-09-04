@@ -233,18 +233,39 @@
     details.fold > summary::after { content:'+'; margin-left:auto; color:var(--muted); font-weight:400; font-size:1.2rem; }
     details.fold[open] > summary::after { content:'−'; }
     details.fold > summary:focus-visible { outline:2px solid var(--primary); outline-offset:3px; }
-    .periods { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+    /* `hidden` must actually hide.
+       An element carrying the hidden attribute was still laid out, because the
+       UA rule [hidden]{display:none} loses to any class here that sets its own
+       display — .toolbar{display:flex} did exactly that, so the custom date
+       pickers stayed on screen underneath a selected preset. */
+    [hidden] { display:none !important; }
+
+    /* One segmented control, on one line — the shape Eesa uses for the same job,
+       rather than a bag of pills that wraps to two rows and reads as clutter.
+       It scrolls sideways instead of wrapping, so adding a period never changes
+       the height of the screen. */
+    .periods {
+      display:flex; gap:2px; margin-bottom:8px;
+      background:var(--card-2); border:1px solid var(--line);
+      border-radius:11px; padding:3px;
+      overflow-x:auto; scrollbar-width:none; -webkit-overflow-scrolling:touch;
+    }
+    .periods::-webkit-scrollbar { display:none; }
     .periods button {
-      background:var(--card-2); border:1px solid var(--line); color:var(--muted);
-      border-radius:999px; padding:6px 13px; font-size:.8rem; font-weight:650;
+      flex:1 0 auto; white-space:nowrap;
+      background:transparent; border:none; color:var(--muted);
+      border-radius:8px; padding:7px 12px; font-size:.8rem; font-weight:600;
       cursor:pointer; font-family:inherit;
     }
-    .periods button:hover { border-color:var(--primary); color:var(--ink); }
-    .periods button.active { background:var(--primary); border-color:transparent; color:var(--primary-ink); }
-    .periods button:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
-    /* The chosen period's own dates, shown small under the chips: "This month"
+    .periods button:hover { color:var(--ink); }
+    .periods button.active { background:var(--primary); color:var(--primary-ink); }
+    .periods button:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
+    /* The chosen period's own dates, shown small under the control: "This month"
        is only meaningful if you can see which days it actually covers. */
-    .periods + .rangenote { color:var(--faint); font-size:.74rem; margin:-4px 0 10px; }
+    .rangerow { display:flex; align-items:center; gap:8px; margin:0 0 12px; }
+    .rangenote { color:var(--faint); font-size:.74rem; }
+    .rangerow .btn.link { margin-left:auto; font-size:.74rem; padding:2px 0; flex-shrink:0; }
+    .rangerow .btn.link.active { text-decoration:underline; }
     .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
     .toolbar input[type="search"], .toolbar input.search { flex:1; min-width:180px; }
     .toolbar select { width:auto; min-width:120px; }
@@ -303,12 +324,12 @@
     // every weekly total disagree with the day rows underneath it.
     const PERIODS = {
       today:  { label: 'Today',      range: () => { const d = new Date(); return [ymd(d), ymd(d)]; } },
-      week:   { label: 'This week',  range: () => {
+      week:   { label: 'Week',       range: () => {
         const d = new Date(); const dow = (d.getDay() + 6) % 7;   // Mon = 0
         const s = new Date(d); s.setDate(d.getDate() - dow);
         return [ymd(s), ymd(d)];
       } },
-      month:  { label: 'This month', range: () => {
+      month:  { label: 'Month',      range: () => {
         const d = new Date();
         return [ymd(new Date(d.getFullYear(), d.getMonth(), 1)), ymd(d)];
       } },
@@ -616,9 +637,11 @@
       <div class="periods" id="${id}p">
         ${Object.entries(PERIODS).map(([k, p]) =>
           `<button data-p="${k}" type="button">${p.label}</button>`).join('')}
-        <button data-p="custom" type="button">Custom</button>
       </div>
-      <div class="rangenote" id="${id}n"></div>
+      <div class="rangerow">
+        <span class="rangenote" id="${id}n"></span>
+        <button class="btn link small" data-p="custom" id="${id}pick" type="button">Pick dates</button>
+      </div>
       <div class="toolbar" id="${id}custom" hidden>
         <label class="field">From<input type="date" id="${id}f" value="${RANGE.from}"></label>
         <label class="field">To<input type="date" id="${id}t" value="${RANGE.to}"></label>
@@ -630,30 +653,31 @@
       const chips = $(id + 'p');
       const custom = $(id + 'custom');
       const note = $(id + 'n');
+      const pick = $(id + 'pick');
       const paint = () => {
         const active = presetFor(RANGE.from, RANGE.to);
         chips.querySelectorAll('button').forEach((b) =>
           b.classList.toggle('active', b.dataset.p === active));
-        // Only the date inputs are hidden when a preset is chosen — never the
-        // chips, so there is always a one-tap way back out of a custom range.
+        // Only the date inputs hide under a preset — never the segmented
+        // control, so there is always a one-tap way back out of a custom range.
         custom.hidden = active !== 'custom';
+        pick.classList.toggle('active', active === 'custom');
         note.textContent = RANGE.from === RANGE.to
           ? dateNice(RANGE.from)
           : `${dateNice(RANGE.from)} → ${dateNice(RANGE.to)}`;
       };
       chips.querySelectorAll('button').forEach((b) => {
         b.onclick = () => {
-          const k = b.dataset.p;
-          if (k === 'custom') {
-            custom.hidden = false;
-            chips.querySelectorAll('button').forEach((x) => x.classList.toggle('active', x === b));
-            $(id + 'f').focus();
-            return;
-          }
-          [RANGE.from, RANGE.to] = PERIODS[k].range();
+          [RANGE.from, RANGE.to] = PERIODS[b.dataset.p].range();
           onApply();
         };
       });
+      pick.onclick = () => {
+        custom.hidden = false;
+        chips.querySelectorAll('button').forEach((x) => x.classList.remove('active'));
+        pick.classList.add('active');
+        $(id + 'f').focus();
+      };
       $(id + 'go').onclick = () => {
         const f = $(id + 'f').value;
         const t = $(id + 't').value;
