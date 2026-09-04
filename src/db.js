@@ -322,7 +322,7 @@ function isNoOpPunch(last, type, { zoneId, forWork }) {
 export async function recordEvent(
   tenantId, employeeRef, type,
   { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true,
-    source = 'geofence', workType = null } = {},
+    source = 'geofence', workType = null, requireConfirm = false } = {},
 ) {
   const la = coord(lat, 90);
   const ln = coord(lng, 180);
@@ -341,14 +341,26 @@ export async function recordEvent(
   // claim a perfect fix and remove all the slack the verification allows.
   const rawAcc = num(accuracyM);
   const acc = rawAcc != null && rawAcc >= 0 ? Math.min(rawAcc, 100000) : null;
-  const rows = await q(
-    `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, accuracy_m, for_work, source, work_type)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id, type, at`,
-    [tenantId, employeeRef, type, zid, la, ln, acc, forWork !== false,
-     String(source || 'geofence'), workType ? String(workType).slice(0, 120) : null],
-  );
+  // Only a check-in can be pending: a check-out ends a shift someone either
+  // vouched for or did not, and asking a manager to confirm a departure adds a
+  // decision without adding any information.
+  const pending = type === 'check_in' && requireConfirm ? 'pending' : null;
+  const hasConfirm = await ensureSettingsColumn();
+  const rows = hasConfirm
+    ? await q(
+        `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, accuracy_m, for_work, source, work_type, confirm_status)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning id, type, at`,
+        [tenantId, employeeRef, type, zid, la, ln, acc, forWork !== false,
+         String(source || 'geofence'), workType ? String(workType).slice(0, 120) : null, pending],
+      )
+    : await q(
+        `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, accuracy_m, for_work, source, work_type)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id, type, at`,
+        [tenantId, employeeRef, type, zid, la, ln, acc, forWork !== false,
+         String(source || 'geofence'), workType ? String(workType).slice(0, 120) : null],
+      );
   await upsertDaySummary(tenantId, employeeRef);
-  return { id: String(rows[0].id), type: rows[0].type, at: iso(rows[0].at) };
+  return { id: String(rows[0].id), type: rows[0].type, at: iso(rows[0].at), pending: pending === 'pending' };
 }
 
 // Today's raw events, ascending — the basis for status + the day summary.
@@ -1063,9 +1075,24 @@ async function ensureSettingsColumn() {
         `alter table tenant_settings
            add column if not exists manager_notify text not null default '${MANAGER_NOTIFY_DEFAULT}'`,
       );
+      await pool.query(
+        `alter table tenant_settings
+           add column if not exists require_confirmation boolean not null default true`,
+      );
+      // Human confirmation lives on the check-in event itself, not in a side
+      // table: it is a property of that punch, and keeping it here means every
+      // query that already reads a punch can see whether a person vouched for
+      // it without another join.
+      //
+      // NULL means "no answer was ever needed" — a check-out, or a punch made
+      // while confirmation was switched off. That is deliberately different
+      // from 'pending', which means someone still owes an answer.
+      await pool.query(`alter table events add column if not exists confirm_status text`);
+      await pool.query(`alter table events add column if not exists confirmed_by text`);
+      await pool.query(`alter table events add column if not exists confirmed_at timestamptz`);
       return true;
     } catch (e) {
-      console.error('[attendance] could not add tenant_settings.manager_notify:', e && e.message);
+      console.error('[attendance] could not add attendance columns:', e && e.message);
       return false;
     }
   })();
@@ -1074,15 +1101,28 @@ async function ensureSettingsColumn() {
 
 export async function getTenantSettings(tenantId) {
   const timezone = await getTenantTimezone(tenantId);
-  if (!(await ensureSettingsColumn())) return { timezone, managerNotify: MANAGER_NOTIFY_DEFAULT };
-  const rows = await q(`select manager_notify from tenant_settings where tenant_id = $1`, [tenantId]);
+  if (!(await ensureSettingsColumn())) {
+    return { timezone, managerNotify: MANAGER_NOTIFY_DEFAULT, requireConfirmation: true };
+  }
+  const rows = await q(
+    `select manager_notify, require_confirmation from tenant_settings where tenant_id = $1`,
+    [tenantId],
+  );
   const v = rows[0]?.manager_notify;
-  return { timezone, managerNotify: MANAGER_NOTIFY.includes(v) ? v : MANAGER_NOTIFY_DEFAULT };
+  return {
+    timezone,
+    managerNotify: MANAGER_NOTIFY.includes(v) ? v : MANAGER_NOTIFY_DEFAULT,
+    // Absent row → on. A workspace that has never opened the setting should get
+    // the safer behaviour (someone vouches for the shift) rather than the
+    // quieter one.
+    requireConfirmation: rows[0]?.require_confirmation !== false,
+  };
 }
 
-export async function setTenantSettings(tenantId, { timezone, managerNotify } = {}) {
+export async function setTenantSettings(tenantId, { timezone, managerNotify, requireConfirmation } = {}) {
   if (timezone !== undefined) await setTenantTimezone(tenantId, timezone);
-  if (managerNotify !== undefined && (await ensureSettingsColumn())) {
+  const ready = await ensureSettingsColumn();
+  if (managerNotify !== undefined && ready) {
     const v = MANAGER_NOTIFY.includes(managerNotify) ? managerNotify : MANAGER_NOTIFY_DEFAULT;
     await q(
       `insert into tenant_settings (tenant_id, timezone, manager_notify, updated_at)
@@ -1091,7 +1131,87 @@ export async function setTenantSettings(tenantId, { timezone, managerNotify } = 
       [tenantId, v],
     );
   }
+  if (requireConfirmation !== undefined && ready) {
+    await q(
+      `insert into tenant_settings (tenant_id, timezone, require_confirmation, updated_at)
+       values ($1, coalesce((select timezone from tenant_settings where tenant_id = $1), 'UTC'), $2, now())
+       on conflict (tenant_id) do update set require_confirmation = excluded.require_confirmation, updated_at = now()`,
+      [tenantId, requireConfirmation !== false],
+    );
+  }
   return getTenantSettings(tenantId);
+}
+
+// ---- human confirmation of a shift ----------------------------------------
+
+/// Check-ins still waiting for a manager to say the person is actually there.
+///
+/// Scoped to the tenant's LOCAL today: a confirmation nobody answered three
+/// weeks ago is a timesheet correction, not something to put in front of an
+/// admin as an action for this morning. Those still show as unconfirmed on the
+/// timesheet, which is where they belong.
+export async function pendingConfirmations(tenantId) {
+  const tz = await tenantTz(tenantId);
+  if (!(await ensureSettingsColumn())) return [];
+  const rows = await q(
+    `select e.id, e.employee_ref, e.at, z.name as zone_name,
+            coalesce(m.name, '') as name
+       from events e
+       left join zones z on z.id = e.zone_id
+       left join memberships m on m.tenant_id = e.tenant_id and m.employee_ref = e.employee_ref
+      where e.tenant_id = $1 and e.type = 'check_in' and e.confirm_status = 'pending'
+        and e.at >= (date_trunc('day', now() at time zone $2) at time zone $2)
+      order by e.at desc`,
+    [tenantId, tz],
+  );
+  return rows.map((r) => ({
+    id: String(r.id),
+    employeeRef: String(r.employee_ref),
+    name: r.name || '',
+    at: iso(r.at),
+    zoneName: r.zone_name || null,
+    minutesAgo: Math.max(0, Math.round((Date.now() - new Date(r.at).getTime()) / 60000)),
+  }));
+}
+
+/// Record a manager's answer. Returns null when the punch is not a pending
+/// check-in in this tenant — so a stale tap from a screen left open overnight
+/// reports "already handled" rather than silently overwriting a decision.
+export async function setConfirmation(tenantId, eventId, status, by) {
+  if (!(await ensureSettingsColumn())) return null;
+  const v = status === 'rejected' ? 'rejected' : 'confirmed';
+  const rows = await q(
+    `update events set confirm_status = $3, confirmed_by = $4, confirmed_at = now()
+      where tenant_id = $1 and id = $2 and type = 'check_in' and confirm_status = 'pending'
+      returning id, employee_ref, at, confirm_status`,
+    [tenantId, eventId, v, String(by || '')],
+  );
+  if (!rows.length) return null;
+  return {
+    id: String(rows[0].id),
+    employeeRef: String(rows[0].employee_ref),
+    at: iso(rows[0].at),
+    confirmStatus: rows[0].confirm_status,
+  };
+}
+
+/// The check-in that a check-out is closing, if it was never confirmed.
+///
+/// Looked up by "most recent check_in still pending for this person today",
+/// which is the same pairing the day summary walks. Returns null when there is
+/// nothing outstanding — the ordinary case, and the one that must stay silent.
+export async function unconfirmedOpenCheckIn(tenantId, employeeRef) {
+  const tz = await tenantTz(tenantId);
+  if (!(await ensureSettingsColumn())) return null;
+  const rows = await q(
+    `select id, at from events
+      where tenant_id = $1 and employee_ref = $2 and type = 'check_in'
+        and confirm_status = 'pending'
+        and at >= (date_trunc('day', now() at time zone $3) at time zone $3)
+      order by at desc limit 1`,
+    [tenantId, employeeRef, tz],
+  );
+  return rows.length ? { id: String(rows[0].id), at: iso(rows[0].at) } : null;
 }
 
 /// The employee_refs of everyone who manages attendance here — the audience for

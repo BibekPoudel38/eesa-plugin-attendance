@@ -214,6 +214,25 @@
     .legend .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
 
     /* Toolbars (search + filters above a table) */
+    /* The one card that is asking for a decision. Given the warning tint rather
+       than another neutral card so it reads as an inbox, not as more data. */
+    .card.needs { border-color:var(--warn); box-shadow:0 0 0 1px var(--warn-weak) inset, var(--shadow); }
+    .confirmrow { align-items:center; }
+    .confirmbtns { display:flex; gap:6px; flex-shrink:0; }
+    @media (max-width:420px) {
+      .confirmrow { flex-wrap:wrap; }
+      .confirmbtns { width:100%; margin-top:8px; }
+      .confirmbtns .btn { flex:1; }
+    }
+    /* Secondary tools, folded away until wanted. */
+    details.fold > summary {
+      cursor:pointer; font-weight:700; font-size:1rem; display:flex; align-items:center; gap:8px;
+      list-style:none; color:var(--ink);
+    }
+    details.fold > summary::-webkit-details-marker { display:none; }
+    details.fold > summary::after { content:'+'; margin-left:auto; color:var(--muted); font-weight:400; font-size:1.2rem; }
+    details.fold[open] > summary::after { content:'−'; }
+    details.fold > summary:focus-visible { outline:2px solid var(--primary); outline-offset:3px; }
     .periods { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
     .periods button {
       background:var(--card-2); border:1px solid var(--line); color:var(--muted);
@@ -656,16 +675,39 @@
     // on the map, the list with names and last-known location, and the manual
     // punch for when someone's phone let them down.
     VIEWS.today = async () => {
-      const [presence, zones] = await Promise.all([
+      const [presence, zones, waiting] = await Promise.all([
         api('/api/admin/presence'),
         api('/api/admin/zones').catch(() => []),
+        api('/api/admin/confirmations').catch(() => []),
       ]);
       const rows = presence.employees || [];
       const people = rows.filter((p) => p.lastLocation);
       const inNow = rows.filter((r) => r.checkedIn).length;
       const hasMap = typeof window.L !== 'undefined';
 
+      // Ordered by what an admin opens this screen to DO, not by what the
+      // database has. Anything asking for a decision comes first; the map and
+      // the manual punch are reference and repair, and were pushing the list of
+      // people below the fold on a phone.
       $('view').innerHTML = `
+        ${waiting.length ? `<div class="card needs">
+          <h2>${ic('activity')} Waiting for you</h2>
+          <p class="lead">${waiting.length === 1 ? 'One person has' : `${waiting.length} people have`} checked in and nobody has confirmed they're on site. Their clock is already running — this only records who vouched for it.</p>
+          ${waiting.map((w) => `
+            <div class="rowitem confirmrow">
+              <div class="grow">
+                <div style="font-weight:650">${esc(w.name || w.employeeRef)}</div>
+                <div class="muted" style="font-size:.78rem">
+                  Checked in ${timeOf(w.at)}${w.zoneName ? ` · ${esc(w.zoneName)}` : ''} · ${w.minutesAgo < 60 ? `${w.minutesAgo} min ago` : `${Math.floor(w.minutesAgo / 60)}h ${w.minutesAgo % 60}m ago`}
+                </div>
+              </div>
+              <div class="confirmbtns">
+                <button class="btn small" data-no="${esc(w.id)}">Not here</button>
+                <button class="btn primary small" data-yes="${esc(w.id)}">Confirm</button>
+              </div>
+            </div>`).join('')}
+        </div>` : ''}
+
         <div class="hero ${inNow ? 'hero--on' : ''}">
           <div class="hero__top">
             <div class="hero__badge">${ic('activity')}</div>
@@ -680,17 +722,6 @@
             <div class="stat"><div class="stat__num num">${rows.filter((r) => r.verification !== 'verified').length}</div><div class="stat__lbl">Unconfirmed</div></div>
           </div>
         </div>
-
-        ${hasMap && people.length ? `<div class="card">
-          <h2>${ic('pin')} Where everyone is</h2>
-          <div id="zmap"></div>
-          <div class="legend">
-            <span class="k"><span class="dot" style="background:var(--success)"></span> On the clock (${inNow})</span>
-            <span class="k"><span class="dot" style="background:var(--muted)"></span> Checked out</span>
-            <span class="k"><span class="dot" style="background:transparent;border:2px solid #8aa0a8"></span> Work zone</span>
-          </div>
-          <div class="map-hint">Each dot is where that person was when they <em>last punched</em> — phones report on arrival and departure, not continuously, so the label carries the time the position was taken.</div>
-        </div>` : ''}
 
         <div class="card">
           <h2>${ic('users')} Who's in</h2>
@@ -709,8 +740,19 @@
             : empty('activity', 'Nobody has checked in yet today.')}
         </div>
 
-        <div class="card">
-          <h2>${ic('clock')} Add a punch by hand</h2>
+        ${hasMap && people.length ? `<div class="card">
+          <h2>${ic('pin')} Where everyone is</h2>
+          <div id="zmap"></div>
+          <div class="legend">
+            <span class="k"><span class="dot" style="background:var(--success)"></span> On the clock (${inNow})</span>
+            <span class="k"><span class="dot" style="background:var(--muted)"></span> Checked out</span>
+            <span class="k"><span class="dot" style="background:transparent;border:2px solid #8aa0a8"></span> Work zone</span>
+          </div>
+          <div class="map-hint">Each dot is where that person was when they <em>last punched</em> — phones report on arrival and departure, not continuously, so the label carries the time the position was taken.</div>
+        </div>` : ''}
+
+        <details class="card fold">
+          <summary>${ic('clock')} Add a punch by hand</summary>
           <p class="lead">For a phone that was off, out of signal, or left at home. Recorded as entered by an admin, and marked as unconfirmed because there's no device location behind it.</p>
           <div class="row">
             <select id="mref" style="flex:1;min-width:170px"></select>
@@ -720,7 +762,20 @@
             </select>
             <button class="btn primary" id="msave">Add</button>
           </div>
-        </div>`;
+        </details>`;
+
+      // --- confirmations ---
+      const answer = async (id, status) => {
+        try {
+          await api('/api/admin/confirm', { method: 'POST', body: { eventId: id, status } });
+          toast(status === 'confirmed' ? 'Confirmed' : 'Marked not here');
+          go('today');
+        } catch (e) { toast(e.message, true); }
+      };
+      $('view').querySelectorAll('[data-yes]').forEach((b) =>
+        b.onclick = () => answer(b.dataset.yes, 'confirmed'));
+      $('view').querySelectorAll('[data-no]').forEach((b) =>
+        b.onclick = () => answer(b.dataset.no, 'rejected'));
 
       if (rows.length) {
         const render = () => {
@@ -777,7 +832,8 @@
         <p class="lead">Hours worked over a period, what's still waiting on you, and what that comes to in pay. Click anyone to see their days and approve them.</p>
         ${rangeBar('ts')}
         <div class="row" style="margin:-4px 0 12px">
-          <label class="wtchk"><input type="checkbox" id="tspend"> Only people with days awaiting approval</label>
+          <label class="wtchk"><input type="checkbox" id="tspend"> Only people awaiting approval</label>
+          <label class="wtchk"><input type="checkbox" id="tsdetail"> Show pay &amp; schedule</label>
           <button class="btn small" id="tscsv" style="margin-left:auto">${ic('download')} Export CSV</button>
         </div>
         <div id="tstot"></div>
@@ -829,8 +885,15 @@
               <div class="stat__num num">$${tPay.toFixed(2)}</div><div class="stat__lbl">Approved pay</div></div>` : ''}
           </div>` : '';
 
+        // Three columns by default — who, how many days, how many hours — because
+        // that is the whole question most of the time. Expected / difference /
+        // approved / pay are four more columns that made this unreadable on a
+        // phone to answer a question only payroll week asks, so they are behind
+        // a toggle rather than always on.
+        const detail = $('tsdetail').checked;
         $('tsout').innerHTML = list.length ? `<table>
-          <thead><tr><th>Name</th><th>Days</th><th>Worked</th><th>Expected</th><th>Diff</th><th>Approved</th><th>Pay</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Days</th><th>Worked</th>${detail
+            ? '<th>Expected</th><th>Diff</th><th>Approved</th><th>Pay</th>' : ''}<th></th></tr></thead>
           <tbody>${list.map((r, i) => {
             const p = pending.get(String(r.employeeRef)) || 0;
             const diff = r.hasSchedule
@@ -841,10 +904,11 @@
                   ${p ? `<span class="pill pending">${p} pending</span>` : ''}</td>
               <td class="num">${r.days}</td>
               <td class="num"><strong>${dur(r.totalMinutes)}</strong></td>
+              ${detail ? `
               <td class="num">${r.hasSchedule ? dur(r.expectedMinutes) : '<span class="muted">—</span>'}</td>
               <td class="num">${diff}</td>
               <td class="num">${dur(r.approvedMinutes)}</td>
-              <td class="num">${r.approvedPay == null ? '<span class="muted">—</span>' : '$' + r.approvedPay.toFixed(2)}</td>
+              <td class="num">${r.approvedPay == null ? '<span class="muted">—</span>' : '$' + r.approvedPay.toFixed(2)}</td>` : ''}
               <td><button class="btn small" id="ts${i}">Open</button></td>
             </tr>`;
           }).join('')}</tbody></table>`
@@ -881,6 +945,7 @@
           btn.disabled = false;
         }
       };
+      $('tsdetail').onchange = run;
       bindRange('ts', run);
       $('tspend').onchange = run;
       await run();
@@ -1183,6 +1248,13 @@
         <div class="card">
           <h2>${ic('bell')} What managers are told</h2>
           <p class="lead">Staff are always told about their own check-in and check-out — that one isn't optional, because the geofence can clock someone in without them touching their phone. This is about what reaches <em>you</em>.</p>
+          <label class="wtchk" style="margin-bottom:12px"><input type="checkbox" id="rc">
+            Ask a manager to confirm each check-in</label>
+          <p class="muted" style="font-size:.76rem;margin:-6px 0 14px">
+            When someone arrives you are asked “is this person here?”. Their clock
+            starts either way — confirming only records who vouched for it. If a
+            shift ends with nobody having answered, you and they are both told.
+          </p>
           <label class="field" style="text-transform:none;letter-spacing:0;font-size:.8rem">Notify managers
             <select id="mn" style="max-width:320px;margin-top:4px">
               <option value="exceptions">Only what needs me — unconfirmed punches</option>
@@ -1272,6 +1344,7 @@
       // BEFORE it is chosen rather than a week later.
       const mnSel = $('mn');
       mnSel.value = settings.managerNotify || 'exceptions';
+      $('rc').checked = settings.requireConfirmation !== false;
       const staffCount = (members || []).filter((m) => m.role).length;
       const mnHint = () => {
         const n = staffCount * 2;
@@ -1284,8 +1357,13 @@
       mnHint();
       mnSel.onchange = mnHint;
       $('mnsave').onclick = async () => {
-        try { await api('/api/admin/settings', { method: 'PUT', body: { managerNotify: mnSel.value } }); toast('Saved'); }
-        catch (e) { toast(e.message, true); }
+        try {
+          await api('/api/admin/settings', { method: 'PUT', body: {
+            managerNotify: mnSel.value,
+            requireConfirmation: $('rc').checked,
+          } });
+          toast('Saved');
+        } catch (e) { toast(e.message, true); }
       };
     };
 

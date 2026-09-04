@@ -296,23 +296,100 @@ async function announcePunch(tenantId, employeeRef, type, status) {
   }
 }
 
+/// Ask the managers to vouch that this person is actually on site.
+///
+/// The clock is ALREADY running — confirmation never gates it. Someone who has
+/// walked into work should not have their pay wait on a manager reading a
+/// notification, and a system that stops the clock when nobody answers punishes
+/// the wrong person. What confirmation buys is a record of who vouched, and a
+/// loud gap when nobody did.
+async function askManagersToConfirm(tenantId, employeeRef, ev, status) {
+  try {
+    const managers = (await db.managerRefs(tenantId)).filter((r) => r !== employeeRef);
+    if (!managers.length) return;
+    const { timezone } = await db.getTenantSettings(tenantId);
+    const who = await db.displayName(tenantId, employeeRef);
+    const at = clockAt(ev.at || new Date(), timezone);
+    const where = status.zoneName ? ` at ${status.zoneName}` : '';
+    notifyUsers(tenantId, managers, {
+      title: `Is ${who} here?`,
+      body: `Checked in at ${at}${where}. Confirm it in Attendance — the clock is already running.`,
+      type: 'attendance_confirm',
+      data: { eventId: String(ev.id || ''), employeeRef: String(employeeRef), at },
+    });
+  } catch (e) {
+    console.error('[attendance] confirmation request failed:', e && e.message);
+  }
+}
+
+/// Nobody answered, and the shift is now over. Tell both sides, once.
+///
+/// Both — not just the manager — because the hours are the employee's. A shift
+/// that goes onto a timesheet marked unconfirmed can be queried later, and the
+/// person it belongs to is entitled to know that before payday rather than
+/// after it.
+async function flagUnconfirmedShift(tenantId, employeeRef, checkIn, status) {
+  try {
+    const { timezone } = await db.getTenantSettings(tenantId);
+    const worked = spanOf(status.today && status.today.totalMinutes);
+    const at = clockAt(checkIn.at, timezone);
+    const who = await db.displayName(tenantId, employeeRef);
+
+    notifyUser(tenantId, employeeRef, {
+      title: `${worked} recorded, not confirmed`,
+      body: `Your check-in at ${at} was never confirmed by a manager. The hours are recorded — ask them to approve the day.`,
+      type: 'attendance_unconfirmed',
+      data: { minutes: String((status.today && status.today.totalMinutes) || 0), at },
+    });
+
+    const managers = (await db.managerRefs(tenantId)).filter((r) => r !== employeeRef);
+    if (!managers.length) return;
+    notifyUsers(tenantId, managers, {
+      title: `${who} clocked ${worked} — unconfirmed`,
+      body: `Checked in at ${at} and has now left. Nobody confirmed they were there.`,
+      type: 'attendance_unconfirmed',
+      data: { employeeRef: String(employeeRef), minutes: String((status.today && status.today.totalMinutes) || 0), at },
+    });
+  } catch (e) {
+    console.error('[attendance] unconfirmed-shift alert failed:', e && e.message);
+  }
+}
+
 // ---- Employee REST hot path (Flutter) — any enrolled user -----------------
 app.post('/api/checkIn', emp, async (req, res) => {
   const { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true, source = 'geofence', workType = null } = req.body || {};
-  const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', { zoneId, lat, lng, accuracyM, forWork, source, workType });
+  // Whether a human has to vouch for this shift. Read BEFORE the insert, because
+  // it decides how the punch is stored — not just who gets told about it.
+  const { requireConfirmation } = await db.getTenantSettings(req.ctx.tenantId).catch(() => ({}));
+  const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', {
+    zoneId, lat, lng, accuracyM, forWork, source, workType,
+    // Only a real shift needs vouching for. Someone marking a visit "not for
+    // work" is not claiming hours, so there is nothing for a manager to confirm.
+    requireConfirm: Boolean(requireConfirmation) && forWork !== false,
+  });
   const status = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
   // A repeated arrival records nothing, so it announces nothing. The OS fires
   // "entered" every time it re-registers a fence you are standing inside — six
   // in a morning is normal — and six identical pushes would be the fastest way
   // to get attendance notifications muted.
-  if (!ev.duplicate) announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_in', status);
+  if (!ev.duplicate) {
+    announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_in', status);
+    if (ev.pending) askManagersToConfirm(req.ctx.tenantId, req.ctx.sub, ev, status);
+  }
   res.json({ ok: true, data: status });
 });
 app.post('/api/checkOut', emp, async (req, res) => {
   const { zoneId = null, lat = null, lng = null, accuracyM = null, source = 'geofence' } = req.body || {};
+  // Look for the outstanding question BEFORE recording the departure: the punch
+  // that closes the shift is also the moment the chance to confirm it in person
+  // has gone.
+  const outstanding = await db.unconfirmedOpenCheckIn(req.ctx.tenantId, req.ctx.sub).catch(() => null);
   const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', { zoneId, lat, lng, accuracyM, source });
   const status = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
-  if (!ev.duplicate) announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_out', status);
+  if (!ev.duplicate) {
+    announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_out', status);
+    if (outstanding) flagUnconfirmedShift(req.ctx.tenantId, req.ctx.sub, outstanding, status);
+  }
   res.json({ ok: true, data: status });
 });
 
@@ -432,6 +509,34 @@ app.delete('/api/admin/zones/:id', manager, async (req, res) =>
 // it happens to have on a membership row (usually blank), so merge the tenant
 // roster over the top exactly as /admin/members does — a table of bare numeric
 // employeeRefs is unreadable to the admin who has to act on it.
+// Who is waiting on you right now. The whole point of the Today screen.
+app.get('/api/admin/confirmations', manager, async (req, res) =>
+  res.json({ ok: true, data: await db.pendingConfirmations(req.ctx.tenantId) }));
+
+// "Yes, they're here" / "No, they aren't."
+app.post('/api/admin/confirm', manager, async (req, res) => {
+  const { eventId, status = 'confirmed' } = req.body || {};
+  if (!eventId) return res.status(400).json({ ok: false, error: 'eventId required' });
+  const result = await db.setConfirmation(req.ctx.tenantId, eventId, status, req.ctx.sub);
+  if (!result) {
+    // Already answered, or not a pending check-in. A screen left open since this
+    // morning must not be able to overwrite a decision someone else made since.
+    return res.status(409).json({ ok: false, error: { code: 'ALREADY_HANDLED', message: 'That check-in has already been answered.' } });
+  }
+  // Tell the employee either way. Being vouched for is worth knowing, and being
+  // marked absent is something they must not first discover on a payslip.
+  const confirmed = result.confirmStatus === 'confirmed';
+  notifyUser(req.ctx.tenantId, result.employeeRef, {
+    title: confirmed ? 'Your shift was confirmed' : 'Your check-in was marked "not here"',
+    body: confirmed
+      ? 'A manager confirmed you are on site.'
+      : 'A manager recorded that you were not on site at check-in. Speak to them if that is wrong.',
+    type: 'attendance_confirmed',
+    data: { status: result.confirmStatus },
+  });
+  res.json({ ok: true, data: result });
+});
+
 app.get('/api/admin/presence', manager, async (req, res) => {
   const tenantId = req.ctx.tenantId;
   const [data, roster] = await Promise.all([
