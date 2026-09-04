@@ -1145,7 +1145,11 @@
                 btn.onclick = async () => {
                   if (!armed) {
                     btn.textContent = 'Tap again to remove';
-                    armed = setTimeout(disarm, 4000);
+                    // Long enough to read the new label and decide. Four
+                    // seconds expired while people were still reading it, which
+                    // turns a deliberate confirm into a button that seems to
+                    // reset itself at random.
+                    armed = setTimeout(disarm, 10000);
                     return;
                   }
                   disarm();
