@@ -214,6 +214,18 @@
     .legend .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
 
     /* Toolbars (search + filters above a table) */
+    .periods { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+    .periods button {
+      background:var(--card-2); border:1px solid var(--line); color:var(--muted);
+      border-radius:999px; padding:6px 13px; font-size:.8rem; font-weight:650;
+      cursor:pointer; font-family:inherit;
+    }
+    .periods button:hover { border-color:var(--primary); color:var(--ink); }
+    .periods button.active { background:var(--primary); border-color:transparent; color:var(--primary-ink); }
+    .periods button:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
+    /* The chosen period's own dates, shown small under the chips: "This month"
+       is only meaningful if you can see which days it actually covers. */
+    .periods + .rangenote { color:var(--faint); font-size:.74rem; margin:-4px 0 10px; }
     .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
     .toolbar input[type="search"], .toolbar input.search { flex:1; min-width:180px; }
     .toolbar select { width:auto; min-width:120px; }
@@ -263,6 +275,40 @@
     const dateNice = (s) => { if (!s) return '—'; const d = new Date(s + 'T00:00:00'); return isNaN(d) ? s : d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }); };
     const today = () => new Date().toISOString().slice(0, 10);
     const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+    const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+    // Named periods, resolved against the phone's own calendar.
+    //
+    // Weeks start on MONDAY. A rota week that starts on Sunday (the JS default
+    // for getDay() === 0) would put Sunday's hours in the wrong week and make
+    // every weekly total disagree with the day rows underneath it.
+    const PERIODS = {
+      today:  { label: 'Today',      range: () => { const d = new Date(); return [ymd(d), ymd(d)]; } },
+      week:   { label: 'This week',  range: () => {
+        const d = new Date(); const dow = (d.getDay() + 6) % 7;   // Mon = 0
+        const s = new Date(d); s.setDate(d.getDate() - dow);
+        return [ymd(s), ymd(d)];
+      } },
+      month:  { label: 'This month', range: () => {
+        const d = new Date();
+        return [ymd(new Date(d.getFullYear(), d.getMonth(), 1)), ymd(d)];
+      } },
+      last:   { label: 'Last month', range: () => {
+        const d = new Date();
+        return [ymd(new Date(d.getFullYear(), d.getMonth() - 1, 1)),
+                ymd(new Date(d.getFullYear(), d.getMonth(), 0))];
+      } },
+    };
+
+    // Which preset a from/to pair corresponds to, so reopening a screen shows
+    // the chip you chose rather than always falling back to Custom.
+    const presetFor = (from, to) => {
+      for (const [k, p] of Object.entries(PERIODS)) {
+        const [f, t] = p.range();
+        if (f === from && t === to) return k;
+      }
+      return 'custom';
+    };
     const initials = (s) => (String(s || '?').trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join('') || '?').toUpperCase();
     const metres = (m) => (m == null ? '' : m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`);
     const osm = (lat, lng) => `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=18/${lat}/${lng}`;
@@ -320,6 +366,8 @@
 
     // ---- inline icon set (stroke, currentColor) ----
     const ICONS = {
+      download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+      bell: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
       clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
       check: '<path d="M20 6L9 17l-5-5"/>',
       pin: '<path d="M12 21s-6-5.7-6-10a6 6 0 0 1 12 0c0 4.3-6 10-6 10z"/><circle cx="12" cy="11" r="2"/>',
@@ -455,20 +503,32 @@
     };
 
     VIEWS.history = async () => {
-      const data = await api('/api/getMyHistory?days=30');
-      const rows = (data && data.days) || [];             // server returns { days: [...] }
-      const totalMin = rows.reduce((a, r) => a + (Number(r.totalMinutes) || 0), 0);
-      const worked = rows.filter((r) => (Number(r.totalMinutes) || 0) > 0).length;
+      // Same period control the admin timesheet uses, for the same reason: "how
+      // many hours have I done this month" is the question people actually open
+      // this screen with, and a fixed 30-day window can only ever answer it by
+      // accident.
       $('view').innerHTML = `
         <div class="card">
-          <div class="stats" style="margin:0">
-            <div class="stat" style="background:var(--card-2)"><div class="stat__num num">${hrs(totalMin)}</div><div class="stat__lbl">Hours · 30d</div></div>
+          <h2>${ic('history')} Your hours</h2>
+          ${rangeBar('hi')}
+          <div id="hitot"></div>
+          <div id="hiout" class="muted">Loading…</div>
+        </div>`;
+
+      const run = async () => {
+        $('hiout').innerHTML = '<span class="muted">Loading…</span>';
+        $('hitot').innerHTML = '';
+        const data = await api('/api/getMyHistory?' + new URLSearchParams({ from: RANGE.from, to: RANGE.to }));
+        const rows = (data && data.days) || [];             // server returns { days: [...] }
+        const totalMin = rows.reduce((a, r) => a + (Number(r.totalMinutes) || 0), 0);
+        const worked = rows.filter((r) => (Number(r.totalMinutes) || 0) > 0).length;
+        $('hitot').innerHTML = `
+          <div class="stats" style="margin:0 0 14px">
+            <div class="stat" style="background:var(--card-2)"><div class="stat__num num">${hrs(totalMin)}</div><div class="stat__lbl">Hours</div></div>
             <div class="stat" style="background:var(--card-2)"><div class="stat__num num">${worked}</div><div class="stat__lbl">Days worked</div></div>
-            <div class="stat" style="background:var(--card-2)"><div class="stat__num num">${rows.length ? hrs(totalMin / Math.max(worked, 1)) : '0.0'}</div><div class="stat__lbl">Avg / day</div></div>
-          </div>
-        </div>
-        <div class="card">
-          <h2>${ic('history')} Last 30 days</h2>
+            <div class="stat" style="background:var(--card-2)"><div class="stat__num num">${worked ? hrs(totalMin / worked) : '0.0'}</div><div class="stat__lbl">Avg / day</div></div>
+          </div>`;
+        $('hiout').innerHTML = `
           ${rows.length ? rows.map((r) => `
             <div class="rowitem" data-hday="${esc(r.date)}" style="cursor:pointer">
               <div class="lead-ic">${ic('calendar')}</div>
@@ -482,13 +542,12 @@
                 ${r.status ? `<span class="pill ${esc(r.status)}">${esc(r.status)}</span>` : ''}
               </div>
             </div>
-            <div id="hev-${esc(r.date)}" style="display:none;padding:0 4px 10px"></div>`).join('') : empty('history', 'No attendance recorded yet. Your days will appear here once you start checking in.')}
-          ${rows.some((r) => r.verification !== 'verified') ? `<p class="muted" style="font-size:.76rem;margin:12px 0 0">Days marked <em>Unverified</em> are still yours and still count — it only means the app couldn’t confirm the location at the time (no GPS signal, or the entry was logged by an admin). Tap a day to see each punch.</p>` : ''}
-        </div>`;
+            <div id="hev-${esc(r.date)}" style="display:none;padding:0 4px 10px"></div>`).join('') : empty('history', 'No attendance in this period. Pick a wider range, or your days will appear here once you start checking in.')}
+          ${rows.some((r) => r.verification !== 'verified') ? `<p class="muted" style="font-size:.76rem;margin:12px 0 0">Days marked <em>Unverified</em> are still yours and still count — it only means the app couldn’t confirm the location at the time (no GPS signal, or the entry was logged by an admin). Tap a day to see each punch.</p>` : ''}`;
       // Tap a day to see the punches behind it, including any the system could
       // not verify — those are exactly the ones a person needs to be able to
       // look at and explain.
-      $('view').querySelectorAll('[data-hday]').forEach((el) => {
+      $('hiout').querySelectorAll('[data-hday]').forEach((el) => {
         el.onclick = async () => {
           const day = el.dataset.hday;
           const box = $('hev-' + day);
@@ -505,6 +564,10 @@
           }
         };
       });
+      };
+
+      bindRange('hi', run);
+      await run();
     };
 
     // ==================== ADMIN ====================
@@ -525,20 +588,64 @@
 
     // A date range remembered across sections, so moving between them doesn't
     // silently change the period you were looking at.
-    const RANGE = { from: daysAgo(13), to: today() };
+    // Defaults to THIS MONTH rather than a rolling 14 days. Payroll, overtime and
+    // "how many hours have I done" are all month-shaped questions; a window that
+    // straddles two months answers none of them without arithmetic.
+    const RANGE = (() => { const [from, to] = PERIODS.month.range(); return { from, to }; })();
+
     const rangeBar = (id) => `
-      <div class="toolbar">
+      <div class="periods" id="${id}p">
+        ${Object.entries(PERIODS).map(([k, p]) =>
+          `<button data-p="${k}" type="button">${p.label}</button>`).join('')}
+        <button data-p="custom" type="button">Custom</button>
+      </div>
+      <div class="rangenote" id="${id}n"></div>
+      <div class="toolbar" id="${id}custom" hidden>
         <label class="field">From<input type="date" id="${id}f" value="${RANGE.from}"></label>
         <label class="field">To<input type="date" id="${id}t" value="${RANGE.to}"></label>
         <button class="btn" id="${id}go" style="align-self:flex-end">Apply</button>
         <span class="count" id="${id}c"></span>
       </div>`;
+
     const bindRange = (id, onApply) => {
+      const chips = $(id + 'p');
+      const custom = $(id + 'custom');
+      const note = $(id + 'n');
+      const paint = () => {
+        const active = presetFor(RANGE.from, RANGE.to);
+        chips.querySelectorAll('button').forEach((b) =>
+          b.classList.toggle('active', b.dataset.p === active));
+        // Only the date inputs are hidden when a preset is chosen — never the
+        // chips, so there is always a one-tap way back out of a custom range.
+        custom.hidden = active !== 'custom';
+        note.textContent = RANGE.from === RANGE.to
+          ? dateNice(RANGE.from)
+          : `${dateNice(RANGE.from)} → ${dateNice(RANGE.to)}`;
+      };
+      chips.querySelectorAll('button').forEach((b) => {
+        b.onclick = () => {
+          const k = b.dataset.p;
+          if (k === 'custom') {
+            custom.hidden = false;
+            chips.querySelectorAll('button').forEach((x) => x.classList.toggle('active', x === b));
+            $(id + 'f').focus();
+            return;
+          }
+          [RANGE.from, RANGE.to] = PERIODS[k].range();
+          onApply();
+        };
+      });
       $(id + 'go').onclick = () => {
-        RANGE.from = $(id + 'f').value;
-        RANGE.to = $(id + 't').value;
+        const f = $(id + 'f').value;
+        const t = $(id + 't').value;
+        if (!f || !t) return toast('Pick both dates', true);
+        // A backwards range returns nothing and looks like "no data" rather than
+        // like a mistake, so swap it instead of reporting an empty period.
+        RANGE.from = f <= t ? f : t;
+        RANGE.to = f <= t ? t : f;
         onApply();
       };
+      paint();
     };
 
     // Everyone enrolled, for the "pick a person" controls.
@@ -671,7 +778,9 @@
         ${rangeBar('ts')}
         <div class="row" style="margin:-4px 0 12px">
           <label class="wtchk"><input type="checkbox" id="tspend"> Only people with days awaiting approval</label>
+          <button class="btn small" id="tscsv" style="margin-left:auto">${ic('download')} Export CSV</button>
         </div>
+        <div id="tstot"></div>
         <div id="tsout" class="muted">Loading…</div>
       </div>`;
 
@@ -696,6 +805,29 @@
         $('tsc').textContent = totalPending
           ? `${totalPending} day${totalPending === 1 ? '' : 's'} awaiting approval`
           : 'nothing awaiting approval';
+
+        // The number the period is actually for. A table of per-person rows never
+        // answers "what did this month cost" without the reader adding a column
+        // up by hand, which is exactly the arithmetic a report exists to remove.
+        const sum = (f) => list.reduce((a, r) => a + (Number(r[f]) || 0), 0);
+        const tWorked = sum('totalMinutes');
+        const tApproved = sum('approvedMinutes');
+        const tExpected = sum('expectedMinutes');
+        const tPay = list.reduce((a, r) => a + (Number(r.approvedPay) || 0), 0);
+        const anySchedule = list.some((r) => r.hasSchedule);
+        $('tstot').innerHTML = list.length ? `
+          <div class="stats" style="margin:0 0 14px">
+            <div class="stat" style="background:var(--card-2)">
+              <div class="stat__num num">${dur(tWorked)}</div><div class="stat__lbl">Hours worked</div></div>
+            <div class="stat" style="background:var(--card-2)">
+              <div class="stat__num num">${dur(tApproved)}</div><div class="stat__lbl">Approved</div></div>
+            ${anySchedule ? `<div class="stat" style="background:var(--card-2)">
+              <div class="stat__num num">${dur(tExpected)}</div><div class="stat__lbl">Expected</div></div>` : ''}
+            <div class="stat" style="background:var(--card-2)">
+              <div class="stat__num num">${list.length}</div><div class="stat__lbl">People</div></div>
+            ${tPay > 0 ? `<div class="stat" style="background:var(--card-2)">
+              <div class="stat__num num">$${tPay.toFixed(2)}</div><div class="stat__lbl">Approved pay</div></div>` : ''}
+          </div>` : '';
 
         $('tsout').innerHTML = list.length ? `<table>
           <thead><tr><th>Name</th><th>Days</th><th>Worked</th><th>Expected</th><th>Diff</th><th>Approved</th><th>Pay</th><th></th></tr></thead>
@@ -722,6 +854,32 @@
           const b = $('ts' + i);
           if (b) b.onclick = () => personTimesheet(String(r.employeeRef), r.name);
         });
+      };
+      // Download through fetch, not a plain link: the export is bearer-authed and
+      // an <a href> cannot carry the token. The blob is revoked straight after
+      // the click so the file isn't pinned in memory for the session.
+      $('tscsv').onclick = async () => {
+        const btn = $('tscsv');
+        btn.disabled = true;
+        try {
+          const res = await fetch('/api/admin/export.csv?' + new URLSearchParams({ from: RANGE.from, to: RANGE.to }), {
+            headers: { Authorization: 'Bearer ' + TOKEN },
+          });
+          if (!res.ok) throw new Error(`Export failed (${res.status})`);
+          const url = URL.createObjectURL(await res.blob());
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `attendance_${RANGE.from}_${RANGE.to}.csv`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+          toast('Export downloaded');
+        } catch (e) {
+          toast(e.message, true);
+        } finally {
+          btn.disabled = false;
+        }
       };
       bindRange('ts', run);
       $('tspend').onchange = run;
@@ -1020,6 +1178,19 @@
           <label class="field" style="text-transform:none;letter-spacing:0;font-size:.8rem">Time zone — decides where one day ends and the next begins
             <input id="tz" value="${esc(settings.timezone || 'UTC')}" placeholder="e.g. America/Los_Angeles" style="max-width:280px;margin-top:4px"></label>
           <div style="margin-top:14px"><button class="btn primary" id="tzsave">Save</button></div>
+        </div>
+
+        <div class="card">
+          <h2>${ic('bell')} What managers are told</h2>
+          <p class="lead">Staff are always told about their own check-in and check-out — that one isn't optional, because the geofence can clock someone in without them touching their phone. This is about what reaches <em>you</em>.</p>
+          <label class="field" style="text-transform:none;letter-spacing:0;font-size:.8rem">Notify managers
+            <select id="mn" style="max-width:320px;margin-top:4px">
+              <option value="exceptions">Only what needs me — unconfirmed punches</option>
+              <option value="all">Every check-in and check-out</option>
+              <option value="off">Nothing</option>
+            </select></label>
+          <p class="muted" style="font-size:.76rem;margin:10px 0 0" id="mnhint"></p>
+          <div style="margin-top:14px"><button class="btn primary" id="mnsave">Save</button></div>
         </div>`;
 
       // --- zones ---
@@ -1090,6 +1261,30 @@
       // --- workspace ---
       $('tzsave').onclick = async () => {
         try { await api('/api/admin/settings', { method: 'PUT', body: { timezone: $('tz').value.trim() || 'UTC' } }); toast('Saved'); }
+        catch (e) { toast(e.message, true); }
+      };
+
+      // --- manager notifications ---
+      // Say out loud what each choice will cost in notifications per day, using
+      // this workspace's own headcount. "Every check-in and check-out" sounds
+      // reasonable in the abstract and is the setting most likely to get all
+      // attendance notifications muted — the number is what makes that concrete
+      // BEFORE it is chosen rather than a week later.
+      const mnSel = $('mn');
+      mnSel.value = settings.managerNotify || 'exceptions';
+      const staffCount = (members || []).filter((m) => m.role).length;
+      const mnHint = () => {
+        const n = staffCount * 2;
+        $('mnhint').textContent = mnSel.value === 'all'
+          ? `About ${n || 'dozens of'} notifications a day, every working day — one per punch from ${staffCount || 'every'} enrolled ${staffCount === 1 ? 'person' : 'people'}.`
+          : mnSel.value === 'off'
+            ? 'You will hear nothing — including when a punch cannot be confirmed. Timesheets still record everything.'
+            : 'Only punches where the location could not be confirmed. Usually a handful a week.';
+      };
+      mnHint();
+      mnSel.onchange = mnHint;
+      $('mnsave').onclick = async () => {
+        try { await api('/api/admin/settings', { method: 'PUT', body: { managerNotify: mnSel.value } }); toast('Saved'); }
         catch (e) { toast(e.message, true); }
       };
     };

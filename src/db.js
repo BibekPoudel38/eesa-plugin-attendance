@@ -504,12 +504,29 @@ async function verificationIndex(tenantId, { from = null, to = null, employeeRef
 // caller never renders a blank where a marker belongs.
 const NO_EVENTS = { verification: 'unverified', verificationCounts: { verified: 0, unverified: 0, outside: 0 } };
 
-export async function myHistory(tenantId, employeeRef, days = 7) {
-  const rows = await q(
-    `select day, first_in, last_out, total_minutes from day_summaries
-      where tenant_id = $1 and employee_ref = $2 order by day desc limit $3`,
-    [tenantId, employeeRef, Math.max(1, Math.min(days, 90))],
-  );
+export async function myHistory(tenantId, employeeRef, days = 7, { from = null, to = null } = {}) {
+  // Two ways to ask, because the callers genuinely differ. The phone's "last 7
+  // days" strip wants a COUNT and does not care which dates those are; a
+  // "This month" filter wants a WINDOW and must not silently return 31 days
+  // that spill into last month. Passing a window wins when one is given.
+  //
+  // The window is not capped at 90 the way the count is: an explicit from/to is
+  // a deliberate question ("March"), and truncating that answer to the newest 90
+  // days would quietly under-report a total the person is checking their pay
+  // against. The count stays capped because it has no upper bound of its own.
+  const windowed = Boolean(from || to);
+  const rows = windowed
+    ? await q(
+        `select day, first_in, last_out, total_minutes from day_summaries
+          where tenant_id = $1 and employee_ref = $2 and day between $3 and $4
+          order by day desc`,
+        [tenantId, employeeRef, from || '1970-01-01', to || '2999-12-31'],
+      )
+    : await q(
+        `select day, first_in, last_out, total_minutes from day_summaries
+          where tenant_id = $1 and employee_ref = $2 order by day desc limit $3`,
+        [tenantId, employeeRef, Math.max(1, Math.min(days, 90))],
+      );
   const dates = rows.map((r) => dayStr(r.day));
   const vi = dates.length
     ? await verificationIndex(tenantId, {
@@ -1013,7 +1030,96 @@ export async function removeMember(tenantId, employeeRef) {
   return { employeeRef: String(employeeRef), removed: true };
 }
 
-// ---- tenant settings (timezone) -------------------------------------------
+// ---- tenant settings (timezone + notification policy) ----------------------
+
+/// How much the attendance managers are told, per tenant.
+///
+///   off         nothing at all
+///   exceptions  only punches a manager would actually act on (default)
+///   all         every check-in and check-out from everyone
+///
+/// The default is deliberately NOT `all`. A workspace of ~28 people produces
+/// something like 56 punches a day, and a manager who is pushed 56 times a day
+/// turns the notifications off — at which point the exceptions they DO need to
+/// see are gone too. Anyone who genuinely wants the firehose can still ask for
+/// it; nobody gets it by accident.
+export const MANAGER_NOTIFY = ['off', 'exceptions', 'all'];
+const MANAGER_NOTIFY_DEFAULT = 'exceptions';
+
+/// Add the settings column if this tenant's database predates it.
+///
+/// The schema lives in Supabase rather than in this repo, so there is no
+/// migration to run — and a deploy that assumed the column existed would 500 on
+/// every settings read until someone applied DDL by hand. `if not exists` makes
+/// this safe to run on every boot, and the catch means a database that refuses
+/// it (no DDL grant) still serves every other route: `managerNotify` just falls
+/// back to the default until someone adds the column.
+let _schemaReady = null;
+async function ensureSettingsColumn() {
+  if (_schemaReady) return _schemaReady;
+  _schemaReady = (async () => {
+    try {
+      await pool.query(
+        `alter table tenant_settings
+           add column if not exists manager_notify text not null default '${MANAGER_NOTIFY_DEFAULT}'`,
+      );
+      return true;
+    } catch (e) {
+      console.error('[attendance] could not add tenant_settings.manager_notify:', e && e.message);
+      return false;
+    }
+  })();
+  return _schemaReady;
+}
+
+export async function getTenantSettings(tenantId) {
+  const timezone = await getTenantTimezone(tenantId);
+  if (!(await ensureSettingsColumn())) return { timezone, managerNotify: MANAGER_NOTIFY_DEFAULT };
+  const rows = await q(`select manager_notify from tenant_settings where tenant_id = $1`, [tenantId]);
+  const v = rows[0]?.manager_notify;
+  return { timezone, managerNotify: MANAGER_NOTIFY.includes(v) ? v : MANAGER_NOTIFY_DEFAULT };
+}
+
+export async function setTenantSettings(tenantId, { timezone, managerNotify } = {}) {
+  if (timezone !== undefined) await setTenantTimezone(tenantId, timezone);
+  if (managerNotify !== undefined && (await ensureSettingsColumn())) {
+    const v = MANAGER_NOTIFY.includes(managerNotify) ? managerNotify : MANAGER_NOTIFY_DEFAULT;
+    await q(
+      `insert into tenant_settings (tenant_id, timezone, manager_notify, updated_at)
+       values ($1, coalesce((select timezone from tenant_settings where tenant_id = $1), 'UTC'), $2, now())
+       on conflict (tenant_id) do update set manager_notify = excluded.manager_notify, updated_at = now()`,
+      [tenantId, v],
+    );
+  }
+  return getTenantSettings(tenantId);
+}
+
+/// The employee_refs of everyone who manages attendance here — the audience for
+/// a manager notification. Read from memberships (the plugin's own record of who
+/// is a manager) rather than from the roster, because the roster describes Eesa
+/// platform roles and a platform admin is not necessarily the person who runs
+/// the rota.
+export async function managerRefs(tenantId) {
+  const rows = await q(
+    `select employee_ref from memberships
+      where tenant_id = $1 and active = true and role = 'manager'`,
+    [tenantId],
+  );
+  return rows.map((r) => String(r.employee_ref));
+}
+
+/// The display name for one person, for a notification that has to say who it
+/// is about. Falls back to a neutral phrase — a push reading "undefined checked
+/// in" is worse than one that is merely vague.
+export async function displayName(tenantId, employeeRef) {
+  const rows = await q(
+    `select name from memberships where tenant_id = $1 and employee_ref = $2`,
+    [tenantId, employeeRef],
+  );
+  const n = (rows[0]?.name || '').trim();
+  return n || 'A team member';
+}
+
 export async function getTenantTimezone(tenantId) {
   const rows = await q(`select timezone from tenant_settings where tenant_id = $1`, [tenantId]);
   return rows[0]?.timezone || 'UTC';

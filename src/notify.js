@@ -16,3 +16,20 @@ export async function notifyUser(tenantId, userId, { title, body = '', type = 'a
     /* best-effort */
   }
 }
+
+/// Fan a notification out to several people at once — the managers who want to
+/// hear about a punch.
+///
+/// Sends run in parallel and every one of them is allowed to fail: this is
+/// called from the check-in path, and a manager's push going missing must never
+/// cost the employee their punch. Nothing is awaited by the caller either, so a
+/// slow backend cannot hold up the response the phone is waiting on.
+export function notifyUsers(tenantId, userIds, payload) {
+  const seen = new Set();
+  for (const id of userIds || []) {
+    const key = String(id || '');
+    if (!key || seen.has(key)) continue; // a manager listed twice is still one person
+    seen.add(key);
+    notifyUser(tenantId, key, payload);
+  }
+}

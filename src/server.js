@@ -11,7 +11,7 @@ import { authMiddleware, verifyToken, requireGateway } from './auth.js';
 import * as db from './db.js';
 import { handleRpc } from './mcp.js';
 import { fetchRoster, rosterHealth } from './roster.js';
-import { notifyUser } from './notify.js';
+import { notifyUser, notifyUsers } from './notify.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANIFEST = JSON.parse(readFileSync(join(__dirname, '..', 'manifest.json'), 'utf-8'));
@@ -214,16 +214,106 @@ app.get('/api/present', async (req, res) => {
   res.json({ ok: true, data: { present: await db.presentToday(ctx.tenantId) } });
 });
 
+// ---- Punch notifications ---------------------------------------------------
+
+/// Clock time in the tenant's own timezone, as a person writes it.
+///
+/// The tenant timezone — not the server's and not the phone's — because this
+/// string ends up next to the day totals, and those are already cut on the
+/// tenant's local midnight. A push saying "checked in at 01:03" for a 18:03
+/// shift is how you lose someone's trust in the whole timesheet.
+function clockAt(when, timezone) {
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      hour: '2-digit', minute: '2-digit', hour12: false, timeZone: timezone || 'UTC',
+    }).format(when instanceof Date ? when : new Date(when));
+  } catch {
+    return '';
+  }
+}
+
+/// "8h 09m", the way hours are said out loud rather than "489 minutes".
+function spanOf(minutes) {
+  const m = Math.max(0, Math.round(Number(minutes) || 0));
+  const h = Math.floor(m / 60);
+  return h ? `${h}h ${String(m % 60).padStart(2, '0')}m` : `${m}m`;
+}
+
+/// Tell the employee — and, depending on the tenant's policy, the managers —
+/// that a punch was recorded.
+///
+/// Every send is fire-and-forget and the whole function is wrapped: this runs
+/// after the punch is already committed, so nothing in here is allowed to turn
+/// a recorded shift into a failed request. The caller does not await it.
+async function announcePunch(tenantId, employeeRef, type, status) {
+  try {
+    const isIn = type === 'check_in';
+    const { timezone, managerNotify } = await db.getTenantSettings(tenantId);
+    const at = clockAt(isIn ? (status.since || new Date()) : new Date(), timezone);
+    const where = status.zoneName ? ` · ${status.zoneName}` : '';
+    const worked = status.today && status.today.totalMinutes;
+
+    // The employee. This is the disclosure that matters most: the geofence can
+    // punch someone in while their phone is in their pocket, and until now the
+    // only notification said "Are you here to work?" without ever confirming
+    // what was actually recorded, or when.
+    notifyUser(tenantId, employeeRef, {
+      title: isIn ? `Checked in at ${at}` : `Checked out at ${at}`,
+      body: isIn
+        ? `Your arrival was recorded${where}.`
+        : `${spanOf(worked)} today${where}.`,
+      type: isIn ? 'attendance_check_in' : 'attendance_check_out',
+      data: { punch: type, at, zone: status.zoneName || '', minutes: String(worked || 0) },
+    });
+
+    if (managerNotify === 'off') return;
+
+    // An exception is a punch a manager would actually do something about. Right
+    // now that means one whose location could not be confirmed — someone punched
+    // with no usable GPS fix, or outside the zone they claimed. "Late" and
+    // "never checked out" are deliberately NOT here: both need the day to be
+    // over (or a schedule to compare against) and belong to an end-of-day pass,
+    // not to the moment of the punch. Guessing at them with a hard-coded 9am
+    // would be wrong for every workspace that doesn't start at nine.
+    const unverified = status.verification && status.verification !== 'verified';
+    if (managerNotify === 'exceptions' && !unverified) return;
+
+    const managers = (await db.managerRefs(tenantId)).filter((r) => r !== employeeRef);
+    if (!managers.length) return;
+    const who = await db.displayName(tenantId, employeeRef);
+    notifyUsers(tenantId, managers, {
+      title: unverified
+        ? `${who} — unconfirmed ${isIn ? 'check-in' : 'check-out'}`
+        : `${who} ${isIn ? 'checked in' : 'checked out'} at ${at}`,
+      body: unverified
+        ? `Recorded at ${at}${where}, but the location could not be confirmed.`
+        : isIn ? `Arrived${where}.` : `${spanOf(worked)} today${where}.`,
+      type: 'attendance_manager',
+      data: { punch: type, employeeRef: String(employeeRef), at, unverified: String(Boolean(unverified)) },
+    });
+  } catch (e) {
+    console.error('[attendance] punch notification failed:', e && e.message);
+  }
+}
+
 // ---- Employee REST hot path (Flutter) — any enrolled user -----------------
 app.post('/api/checkIn', emp, async (req, res) => {
   const { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true, source = 'geofence', workType = null } = req.body || {};
-  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', { zoneId, lat, lng, accuracyM, forWork, source, workType });
-  res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) });
+  const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', { zoneId, lat, lng, accuracyM, forWork, source, workType });
+  const status = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
+  // A repeated arrival records nothing, so it announces nothing. The OS fires
+  // "entered" every time it re-registers a fence you are standing inside — six
+  // in a morning is normal — and six identical pushes would be the fastest way
+  // to get attendance notifications muted.
+  if (!ev.duplicate) announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_in', status);
+  res.json({ ok: true, data: status });
 });
 app.post('/api/checkOut', emp, async (req, res) => {
   const { zoneId = null, lat = null, lng = null, accuracyM = null, source = 'geofence' } = req.body || {};
-  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', { zoneId, lat, lng, accuracyM, source });
-  res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) });
+  const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', { zoneId, lat, lng, accuracyM, source });
+  const status = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
+  if (!ev.duplicate) announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_out', status);
+  res.json({ ok: true, data: status });
 });
 
 // Employee taps a LOCATION NFC tag with their OWN phone → check-in, or check-out
@@ -260,7 +350,9 @@ app.post('/api/kiosk/nfc', manager, async (req, res) => {
 app.get('/api/getMyStatus', emp, async (req, res) => res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) }));
 app.get('/api/getMyZones', emp, async (req, res) => res.json({ ok: true, data: await db.listZones(req.ctx.tenantId) }));
 app.get('/api/getMyHistory', emp, async (req, res) =>
-  res.json({ ok: true, data: await db.myHistory(req.ctx.tenantId, req.ctx.sub, Number(req.query.days) || 7) }));
+  res.json({ ok: true, data: await db.myHistory(req.ctx.tenantId, req.ctx.sub, Number(req.query.days) || 7, {
+    from: req.query.from || null, to: req.query.to || null,
+  }) }));
 // A staff member's OWN punches, with where each happened and whether that
 // location could be confirmed. Self-scoped by the token — this never exposes
 // anyone else's movements. Unverified punches are returned like any other; the
@@ -321,9 +413,16 @@ app.delete('/api/admin/members/:id', manager, async (req, res) =>
   res.json({ ok: true, data: await db.removeMember(req.ctx.tenantId, req.params.id) }));
 
 app.get('/api/admin/settings', manager, async (req, res) =>
-  res.json({ ok: true, data: { timezone: await db.getTenantTimezone(req.ctx.tenantId) } }));
-app.put('/api/admin/settings', manager, async (req, res) =>
-  res.json({ ok: true, data: await db.setTenantTimezone(req.ctx.tenantId, (req.body || {}).timezone || 'UTC') }));
+  res.json({ ok: true, data: await db.getTenantSettings(req.ctx.tenantId) }));
+app.put('/api/admin/settings', manager, async (req, res) => {
+  const body = req.body || {};
+  // Only touch what was sent. Saving the timezone from the Setup screen must not
+  // silently reset a notification policy the screen didn't show.
+  res.json({ ok: true, data: await db.setTenantSettings(req.ctx.tenantId, {
+    ...(body.timezone !== undefined ? { timezone: body.timezone } : {}),
+    ...(body.managerNotify !== undefined ? { managerNotify: body.managerNotify } : {}),
+  }) });
+});
 
 app.get('/api/admin/zones', manager, async (req, res) => res.json({ ok: true, data: await db.listZones(req.ctx.tenantId) }));
 app.post('/api/admin/zones', manager, async (req, res) => res.json({ ok: true, data: await db.createZone(req.ctx.tenantId, req.body || {}) }));
@@ -451,6 +550,58 @@ app.get('/api/admin/employee-report', manager, async (req, res) => {
   ]);
   const who = roster.find((u) => String(u.id) === employeeRef);
   res.json({ ok: true, data: { ...detail, name: (who && who.name) || '', email: (who && who.email) || '' } });
+});
+
+// The same report as a spreadsheet, because payroll happens in a spreadsheet.
+//
+// Served as a real download (Content-Disposition) with the range in the
+// filename, so a month's export doesn't land in Downloads as "export.csv" next
+// to last month's. Manager-gated exactly like the report it mirrors.
+app.get('/api/admin/export.csv', manager, async (req, res) => {
+  const from = req.query.from || null;
+  const to = req.query.to || null;
+  const [rows, roster] = await Promise.all([
+    db.report(req.ctx.tenantId, { from, to }),
+    fetchRoster(req.ctx.tenantId).catch(() => []),
+  ]);
+  const nameOf = new Map(roster.map((u) => [String(u.id), u.name || '']));
+  const emailOf = new Map(roster.map((u) => [String(u.id), u.email || '']));
+
+  // Excel reads a leading "=", "+", "-" or "@" as a formula, so a name like
+  // "=Sum" would execute on open. Prefix those with a quote — the standard CSV
+  // injection guard — and quote every field so a comma in a name can't shift
+  // the columns.
+  const cell = (v) => {
+    let t = v == null ? '' : String(v);
+    if (/^[=+\-@]/.test(t)) t = "'" + t;
+    return '"' + t.replace(/"/g, '""') + '"';
+  };
+  const hours = (m) => (Math.round((Number(m) || 0) / 0.6) / 100).toFixed(2);
+
+  const header = ['Name', 'Email', 'Days worked', 'Hours worked', 'Hours approved',
+                  'Hours expected', 'Difference', 'Pay rate', 'Approved pay'];
+  const lines = [header.map(cell).join(',')];
+  for (const r of rows) {
+    const ref = String(r.employeeRef);
+    lines.push([
+      r.name || nameOf.get(ref) || ref,
+      emailOf.get(ref) || '',
+      r.days,
+      hours(r.totalMinutes),
+      hours(r.approvedMinutes),
+      hours(r.expectedMinutes),
+      hours(r.differenceMinutes),
+      r.payRate == null ? '' : r.payRate,
+      r.approvedPay == null ? '' : r.approvedPay,
+    ].map(cell).join(','));
+  }
+  const span = `${from || 'start'}_${to || 'today'}`;
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="attendance_${span}.csv"`);
+  // A BOM, so Excel opens a name with an accent in it as UTF-8 rather than as
+  // mojibake — without it the file is correct and looks broken, which reads to
+  // the person opening it as the same thing.
+  res.send('\ufeff' + lines.join('\r\n') + '\r\n');
 });
 
 // Optional per-person, per-day schedule (expected hours) → Actual vs Expected.
