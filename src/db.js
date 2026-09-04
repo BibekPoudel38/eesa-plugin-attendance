@@ -549,13 +549,12 @@ export async function myHistory(tenantId, employeeRef, days = 7, { from = null, 
         [tenantId, employeeRef, Math.max(1, Math.min(days, 90))],
       );
   const dates = rows.map((r) => dayStr(r.day));
-  const vi = dates.length
-    ? await verificationIndex(tenantId, {
-        employeeRef,
-        from: dates[dates.length - 1],
-        to: dates[0],
-      })
-    : new Map();
+  const window = dates.length
+    ? { employeeRef, from: dates[dates.length - 1], to: dates[0] }
+    : null;
+  const [vi, ci] = window
+    ? await Promise.all([verificationIndex(tenantId, window), confirmationIndex(tenantId, window)])
+    : [new Map(), new Map()];
   return {
     days: rows.map((r) => {
       const date = dayStr(r.day);
@@ -565,6 +564,10 @@ export async function myHistory(tenantId, employeeRef, days = 7, { from = null, 
         firstIn: iso(r.first_in),
         lastOut: iso(r.last_out),
         status: r.last_out ? 'complete' : r.first_in ? 'incomplete' : 'open',
+        // null when confirmation never applied to this day (a manager's own
+        // shift, or a workspace with the setting off) — deliberately different
+        // from 'unconfirmed', which means it was asked and never answered.
+        confirmStatus: ci.get(`${employeeRef}|${date}`) || null,
         ...(vi.get(`${employeeRef}|${date}`) || NO_EVENTS),
       };
     }),
@@ -585,7 +588,15 @@ export async function employeeDetail(tenantId, employeeRef, { from = null, to = 
       order by day desc`,
     [tenantId, employeeRef, f, t],
   );
-  const vi = await verificationIndex(tenantId, { employeeRef, from: f === '1970-01-01' ? null : f, to: t === '2999-12-31' ? null : t });
+  const window = {
+    employeeRef,
+    from: f === '1970-01-01' ? null : f,
+    to: t === '2999-12-31' ? null : t,
+  };
+  const [vi, ci] = await Promise.all([
+    verificationIndex(tenantId, window),
+    confirmationIndex(tenantId, window),
+  ]);
   const days = rows.map((r) => {
     const date = dayStr(r.day);
     return {
@@ -594,6 +605,10 @@ export async function employeeDetail(tenantId, employeeRef, { from = null, to = 
       firstIn: iso(r.first_in),
       lastOut: iso(r.last_out),
       approvalStatus: r.approval_status || null,
+      // Whether a person vouched for this shift, as distinct from whether the
+      // phone's location backed it up. Both can fail independently and an admin
+      // approving a timesheet needs to see which one did.
+      confirmStatus: ci.get(`${employeeRef}|${date}`) || null,
       status: r.last_out ? 'complete' : r.first_in ? 'incomplete' : 'open',
       ...(vi.get(`${employeeRef}|${date}`) || NO_EVENTS),
     };
@@ -1152,6 +1167,81 @@ export async function setTenantSettings(tenantId, { timezone, managerNotify, req
 }
 
 // ---- human confirmation of a shift ----------------------------------------
+
+/// Whether this shift needs a human to vouch for it at all.
+///
+/// Two people never need confirming, for the same reason: there is nobody whose
+/// word would add anything.
+///
+///   * A MANAGER checking themselves in. They are the authority the question
+///     would be asked of. Marking their own arrival "pending" asks the other
+///     managers to police a peer, and in a workspace with one manager it can
+///     never be answered at all — the shift would sit pending until check-out
+///     and then fire an "unconfirmed" alert every single day, about the one
+///     person who cannot be wrong about it.
+///   * ANYONE, when there is no other manager on the roster to ask.
+///
+/// Returning false here is not "skip the check" — it means the check does not
+/// apply, and the punch is stored with no confirmation state rather than a
+/// pending one nobody can clear.
+export async function needsConfirmation(tenantId, employeeRef) {
+  const [me, managers] = await Promise.all([
+    getMembership(tenantId, employeeRef),
+    managerRefs(tenantId),
+  ]);
+  if (me && me.role === 'manager') return false;
+  return managers.some((r) => String(r) !== String(employeeRef));
+}
+
+/// A check-in that reached its check-out with nobody having answered.
+///
+/// Moved out of 'pending' rather than left in it, because the two mean
+/// different things to different screens: 'pending' is a question still worth
+/// putting in front of an admin today, 'unconfirmed' is a settled fact about a
+/// finished shift that belongs on the timesheet. Leaving it pending would keep
+/// yesterday's unanswerable questions stacking up in today's queue forever.
+export async function markUnconfirmed(tenantId, eventId) {
+  if (!(await ensureSettingsColumn())) return null;
+  const rows = await q(
+    `update events set confirm_status = 'unconfirmed'
+      where tenant_id = $1 and id = $2 and confirm_status = 'pending'
+      returning id`,
+    [tenantId, eventId],
+  );
+  return rows.length ? String(rows[0].id) : null;
+}
+
+/// Per-day confirmation state, keyed `employeeRef|yyyy-mm-dd`, so a day list can
+/// say whether anyone vouched for it without a query per row.
+///
+/// A day is only as good as its worst check-in: one unconfirmed arrival makes
+/// the day unconfirmed, exactly as one unverified location does.
+async function confirmationIndex(tenantId, { from = null, to = null, employeeRef = null } = {}) {
+  const out = new Map();
+  if (!(await ensureSettingsColumn())) return out;
+  const tz = await tenantTz(tenantId);
+  const params = [tenantId, tz, from || '1970-01-01', to || '2999-12-31'];
+  const clauses = [
+    'tenant_id = $1',
+    "type = 'check_in'",
+    'confirm_status is not null',
+    '(at at time zone $2)::date between $3::date and $4::date',
+  ];
+  if (employeeRef) { params.push(employeeRef); clauses.push(`employee_ref = $${params.length}`); }
+  const rows = await q(
+    `select employee_ref, confirm_status, (at at time zone $2)::date as day
+       from events where ${clauses.join(' and ')}`,
+    params,
+  );
+  const rank = { rejected: 0, unconfirmed: 1, pending: 2, confirmed: 3 };
+  for (const r of rows) {
+    const key = `${r.employee_ref}|${dayStr(r.day)}`;
+    const prev = out.get(key);
+    const v = String(r.confirm_status);
+    if (prev === undefined || (rank[v] ?? 9) < (rank[prev] ?? 9)) out.set(key, v);
+  }
+  return out;
+}
 
 /// Check-ins still waiting for a manager to say the person is actually there.
 ///

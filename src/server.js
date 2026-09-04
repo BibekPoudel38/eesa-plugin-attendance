@@ -361,11 +361,17 @@ app.post('/api/checkIn', emp, async (req, res) => {
   // Whether a human has to vouch for this shift. Read BEFORE the insert, because
   // it decides how the punch is stored — not just who gets told about it.
   const { requireConfirmation } = await db.getTenantSettings(req.ctx.tenantId).catch(() => ({}));
+  // Three things have to be true before a shift is held for someone's word:
+  // the workspace asks for it, this is a real shift (a visit marked "not for
+  // work" claims no hours, so there is nothing to vouch for), and there is
+  // actually somebody whose answer would mean anything — which excludes a
+  // manager's own arrival and a roster with no other manager on it.
+  const needsConfirm = Boolean(requireConfirmation)
+    && forWork !== false
+    && await db.needsConfirmation(req.ctx.tenantId, req.ctx.sub).catch(() => false);
   const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', {
     zoneId, lat, lng, accuracyM, forWork, source, workType,
-    // Only a real shift needs vouching for. Someone marking a visit "not for
-    // work" is not claiming hours, so there is nothing for a manager to confirm.
-    requireConfirm: Boolean(requireConfirmation) && forWork !== false,
+    requireConfirm: needsConfirm,
   });
   const status = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
   // A repeated arrival records nothing, so it announces nothing. The OS fires
@@ -388,7 +394,14 @@ app.post('/api/checkOut', emp, async (req, res) => {
   const status = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
   if (!ev.duplicate) {
     announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_out', status);
-    if (outstanding) flagUnconfirmedShift(req.ctx.tenantId, req.ctx.sub, outstanding, status);
+    if (outstanding) {
+      // Settle it before anyone is told. The alert says the shift went
+      // unconfirmed, and it must be true of the record by the time it lands —
+      // not a claim the timesheet still contradicts because the punch is
+      // sitting in 'pending' waiting for an answer the day has run out of.
+      await db.markUnconfirmed(req.ctx.tenantId, outstanding.id).catch(() => null);
+      flagUnconfirmedShift(req.ctx.tenantId, req.ctx.sub, outstanding, status);
+    }
   }
   res.json({ ok: true, data: status });
 });
