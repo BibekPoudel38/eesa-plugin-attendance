@@ -12,6 +12,7 @@ import * as db from './db.js';
 import { handleRpc } from './mcp.js';
 import { fetchRoster, rosterHealth } from './roster.js';
 import { nameMapOf, withNames } from './names.js';
+import { telemetry, flush as flushTelemetry } from './telemetry.js';
 import { notifyUser, notifyUsers } from './notify.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -20,6 +21,11 @@ const serverInfo = { name: MANIFEST.slug, version: MANIFEST.version };
 
 const app = express();
 app.use(express.json());
+// This service's own access log. Mounted first so it measures the whole
+// request rather than whatever happens after the middleware above it, and so
+// a request rejected by auth is recorded too — those are exactly the ones
+// worth being able to follow.
+app.use(telemetry());
 
 // ---- Async route safety ----------------------------------------------------
 // Express 4 does NOT catch a rejected promise from an `async` handler. Node then
