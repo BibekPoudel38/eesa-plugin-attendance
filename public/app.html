@@ -1039,11 +1039,9 @@
       const render = () => {
         $('view').innerHTML = `
           <div class="card">
-            <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
-              <button class="btn small" id="back">← All timesheets</button>
-              <span class="muted" style="font-size:.78rem">${esc(dateNice(RANGE.from))} → ${esc(dateNice(RANGE.to))}</span>
-            </div>
+            <button class="btn small" id="back" style="margin-bottom:10px">← All timesheets</button>
             <h2>${ic('user')} ${esc(detail.name || name || ref)}</h2>
+            ${rangeBar('pt')}
             <div class="stats" style="margin-top:10px">
               <div class="stat"><div class="stat__num num">${dur(detail.totalMinutes)}</div><div class="stat__lbl">Worked</div></div>
               <div class="stat"><div class="stat__num num">${detail.daysWorked}</div><div class="stat__lbl">Days</div></div>
@@ -1076,6 +1074,14 @@
           </div>`;
 
         $('back').onclick = () => go('timesheets');
+
+        // The same period control as everywhere else, on the screen where the
+        // question is asked most: this person's days. It was a line of static
+        // text, so changing the month meant backing out to the list, changing
+        // it there, and drilling in again — three steps to answer "what about
+        // last month". Changing it here reloads this person in place, and the
+        // shared RANGE means the list you go back to has moved with you.
+        bindRange('pt', () => personTimesheet(ref, name));
 
         $('view').querySelectorAll('button[data-day]').forEach((b) => {
           b.onclick = async () => {
