@@ -360,7 +360,16 @@ export async function recordEvent(
          String(source || 'geofence'), workType ? String(workType).slice(0, 120) : null],
       );
   await upsertDaySummary(tenantId, employeeRef);
-  return { id: String(rows[0].id), type: rows[0].type, at: iso(rows[0].at), pending: pending === 'pending' };
+  // Gated on hasConfirm, not just on the request. If the DDL never landed (no
+  // grant on this database) the punch was inserted WITHOUT confirm_status, so
+  // pendingConfirmations can never return it — claiming it is pending would ask
+  // every manager to confirm a check-in that will not appear in their queue.
+  return {
+    id: String(rows[0].id),
+    type: rows[0].type,
+    at: iso(rows[0].at),
+    pending: hasConfirm && pending === 'pending',
+  };
 }
 
 // Today's raw events, ascending — the basis for status + the day summary.
