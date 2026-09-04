@@ -307,11 +307,33 @@ async function lastEvent(tenantId, employeeRef) {
 /// A check-in at a DIFFERENT zone is a real move and always recorded. A
 /// "not for work" check-in always records, because that genuinely changes the
 /// state. A check-out with nothing open closes nothing and is dropped.
-export function isNoOpPunch(last, type, { zoneId, forWork }) {
+/// How long an unclosed check-in can still count as "the same stretch of
+/// presence". Past this, a new arrival is a new shift.
+///
+/// This bound is the whole point. Without it the rule read "your last event was
+/// a check-in, so this one is a repeat" with no reference to WHEN — and a
+/// check-in that never got its check-out (phone died, left without the exit
+/// firing, app killed) made every future arrival a no-op FOREVER. Measured on
+/// production 2026-09-04: five people had a dangling check-in, the oldest 54
+/// days, and not one of them could clock in again. Nothing errored; the server
+/// answered 200 and recorded nothing.
+///
+/// Twelve hours is longer than any real shift and far longer than the repeats
+/// this guard exists for — iOS re-fires "entered" on every fence
+/// re-registration, which is minutes apart, not days. Being wrong on the long
+/// side costs one extra event row on a genuine double shift, and computeToday
+/// keeps the earliest start so the total is unaffected. Being wrong on the
+/// short side costs somebody their pay.
+const SAME_PRESENCE_MS = 12 * 60 * 60 * 1000;
+
+export function isNoOpPunch(last, type, { zoneId, forWork }, now = Date.now()) {
   if (type === 'check_in') {
     if (forWork === false) return false;           // a real state change
     if (!last || last.type !== 'check_in') return false;
     if (last.for_work === false) return false;     // resuming work after a break
+    // Stale open shift → this is a new arrival, not a repeat of the old one.
+    const at = last.at ? new Date(last.at).getTime() : null;
+    if (at == null || Number.isNaN(at) || now - at > SAME_PRESENCE_MS) return false;
     // Same place (or the new punch names no place) → same presence.
     return zoneId == null || last.zone_id == null || String(last.zone_id) === String(zoneId);
   }

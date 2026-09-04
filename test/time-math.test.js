@@ -26,33 +26,62 @@ describe('isNoOpPunch — the repeat-arrival guard', () => {
     assert.equal(isNoOpPunch(null, 'check_in', { zoneId: 'z1', forWork: true }), false);
   });
 
-  test('arriving again at the same zone changes nothing', () => {
+  const NOW = Date.parse('2026-09-04T18:00:00.000Z');
+  const ago = (ms) => new Date(NOW - ms).toISOString();
+  const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR;
+
+  test('arriving again at the same zone minutes later changes nothing', () => {
     // iOS re-fires "entered" every time the fence is re-registered, which
     // happens on every app open. Six in a morning is normal.
-    const last = { type: 'check_in', zone_id: 'z1', for_work: true };
-    assert.equal(isNoOpPunch(last, 'check_in', { zoneId: 'z1', forWork: true }), true);
+    const last = { type: 'check_in', zone_id: 'z1', for_work: true, at: ago(20 * MIN) };
+    assert.equal(isNoOpPunch(last, 'check_in', { zoneId: 'z1', forWork: true }, NOW), true);
+  });
+
+  test('a check-in left open for DAYS does not block the next one', () => {
+    // The production bug. A shift whose check-out never fired — phone died,
+    // left without the exit, app killed — used to make every future arrival a
+    // no-op forever, because the rule asked whether the last event was a
+    // check-in and never asked WHEN. Five people were stuck like this, the
+    // oldest for 54 days, and the server answered 200 each time and recorded
+    // nothing.
+    const stale = { type: 'check_in', zone_id: 'z1', for_work: true, at: ago(9 * DAY) };
+    assert.equal(isNoOpPunch(stale, 'check_in', { zoneId: 'z1', forWork: true }, NOW), false);
+  });
+
+  test('the boundary: 11h is the same shift, 13h is a new one', () => {
+    const at11 = { type: 'check_in', zone_id: 'z1', for_work: true, at: ago(11 * HOUR) };
+    const at13 = { type: 'check_in', zone_id: 'z1', for_work: true, at: ago(13 * HOUR) };
+    assert.equal(isNoOpPunch(at11, 'check_in', { zoneId: 'z1', forWork: true }, NOW), true);
+    assert.equal(isNoOpPunch(at13, 'check_in', { zoneId: 'z1', forWork: true }, NOW), false);
+  });
+
+  test('a last event with no timestamp is treated as stale, not as a repeat', () => {
+    // Fail towards recording the punch. Losing a shift is worse than an extra
+    // row that computeToday will fold into the same interval anyway.
+    const noTime = { type: 'check_in', zone_id: 'z1', for_work: true, at: null };
+    assert.equal(isNoOpPunch(noTime, 'check_in', { zoneId: 'z1', forWork: true }, NOW), false);
   });
 
   test('a punch that names no zone is still the same presence', () => {
-    const last = { type: 'check_in', zone_id: 'z1', for_work: true };
-    assert.equal(isNoOpPunch(last, 'check_in', { zoneId: null, forWork: true }), true);
+    const last = { type: 'check_in', zone_id: 'z1', for_work: true, at: ago(5 * MIN) };
+    assert.equal(isNoOpPunch(last, 'check_in', { zoneId: null, forWork: true }, NOW), true);
   });
 
   test('arriving at a DIFFERENT zone is a real punch', () => {
     // Moving between two sites in one shift has to record, or the second
     // location never appears on the timesheet.
-    const last = { type: 'check_in', zone_id: 'z1', for_work: true };
-    assert.equal(isNoOpPunch(last, 'check_in', { zoneId: 'z2', forWork: true }), false);
+    const last = { type: 'check_in', zone_id: 'z1', for_work: true, at: ago(5 * MIN) };
+    assert.equal(isNoOpPunch(last, 'check_in', { zoneId: 'z2', forWork: true }, NOW), false);
   });
 
   test('"not for work" is always a real state change', () => {
-    const last = { type: 'check_in', zone_id: 'z1', for_work: true };
-    assert.equal(isNoOpPunch(last, 'check_in', { zoneId: 'z1', forWork: false }), false);
+    const last = { type: 'check_in', zone_id: 'z1', for_work: true, at: ago(5 * MIN) };
+    assert.equal(isNoOpPunch(last, 'check_in', { zoneId: 'z1', forWork: false }, NOW), false);
   });
 
   test('going back on the clock after "not for work" records', () => {
-    const last = { type: 'check_in', zone_id: 'z1', for_work: false };
-    assert.equal(isNoOpPunch(last, 'check_in', { zoneId: 'z1', forWork: true }), false);
+    const last = { type: 'check_in', zone_id: 'z1', for_work: false, at: ago(5 * MIN) };
+    assert.equal(isNoOpPunch(last, 'check_in', { zoneId: 'z1', forWork: true }, NOW), false);
   });
 
   test('leaving with nothing open is a no-op', () => {
