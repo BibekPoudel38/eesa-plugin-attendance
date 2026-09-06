@@ -567,13 +567,15 @@ export async function myHistory(tenantId, employeeRef, days = 7, { from = null, 
   const windowed = Boolean(from || to);
   const rows = windowed
     ? await q(
-        `select day, first_in, last_out, total_minutes from day_summaries
+        `select day, first_in, last_out, total_minutes, approval_status
+           from day_summaries
           where tenant_id = $1 and employee_ref = $2 and day between $3 and $4
           order by day desc`,
         [tenantId, employeeRef, from || '1970-01-01', to || '2999-12-31'],
       )
     : await q(
-        `select day, first_in, last_out, total_minutes from day_summaries
+        `select day, first_in, last_out, total_minutes, approval_status
+           from day_summaries
           where tenant_id = $1 and employee_ref = $2 order by day desc limit $3`,
         [tenantId, employeeRef, Math.max(1, Math.min(days, 90))],
       );
@@ -619,6 +621,16 @@ export async function myHistory(tenantId, employeeRef, days = 7, { from = null, 
         // shift, or a workspace with the setting off) — deliberately different
         // from 'unconfirmed', which means it was asked and never answered.
         confirmStatus: ci.get(`${employeeRef}|${date}`) || null,
+        // Whether a manager has approved the day, which is what decides
+        // whether these hours are paid.
+        //
+        // `employeeDetail` below has always selected this and its own comment
+        // calls itself "the same data myHistory gives a staff member about
+        // themselves" — which was not true. A day could be REJECTED weeks ago
+        // and the person it belongs to had no way to find out: the admin sees
+        // the decision, the staff view showed the hours as though nothing had
+        // happened to them.
+        approvalStatus: r.approval_status || 'pending',
         ...(vi.get(`${employeeRef}|${date}`) || NO_EVENTS),
       };
     }),
