@@ -139,9 +139,24 @@ function appRoleOf(ctx) {
   if (!claim && isPlatformAdmin(ctx)) return 'admin'; // bootstrap fallback
   return null;
 }
+/// The roster's last word on somebody Eesa calls an admin.
+///
+/// Eesa's ADMIN role and this roster's role are different things and on the
+/// live workspace they disagree: an employee on an hourly rate carried ADMIN,
+/// which made them a manager HERE — able to approve and reject their
+/// colleagues' days and their pay, and told where each of them was.
+///
+/// So the roster wins where it has spoken. Only where it has: an admin the
+/// roster has never heard of — one who does not clock in — keeps everything,
+/// because on this workspace that is the only real administrator there is.
+/// Demoting them too would leave the product with no manager at all.
+function rosterDemotes(member) {
+  return Boolean(member && member.active !== false && member.role === 'staff');
+}
 // The UI shell branches on a 'manager' | 'staff' | null vocabulary; map onto it.
-function uiRoleOf(ctx) {
+function uiRoleOf(ctx, member) {
   const r = appRoleOf(ctx);
+  if (r === 'admin' && rosterDemotes(member)) return 'staff';
   return r === 'admin' ? 'manager' : r === 'staff' ? 'staff' : null;
 }
 function withMember({ manager = false } = {}) {
@@ -166,7 +181,10 @@ function withMember({ manager = false } = {}) {
         // staff in Eesa (appRole='staff') can never regain manager access via a
         // stale membership.role='manager' row.
         const hasAppRoleClaim = req.ctx.appRole != null && String(req.ctx.appRole) !== '';
-        if (!(role === 'admin' || (!hasAppRoleClaim && member && member.role === 'manager'))) {
+        // ...and the roster still overrules it downward. Someone it lists as
+        // staff does not approve anybody's hours, whatever Eesa says.
+        const isManagerHere = role === 'admin' && !rosterDemotes(member);
+        if (!(isManagerHere || (!hasAppRoleClaim && member && member.role === 'manager'))) {
           return res.status(403).json({ ok: false, error: { code: 'FORBIDDEN', message: 'Admin access required.' } });
         }
       } else if (!(role !== null || member)) {
@@ -197,10 +215,14 @@ app.get('/api/me', async (req, res) => {
   const admin = isPlatformAdmin(ctx);
   // appRole (Eesa authority) decides access; the membership row is kept only for
   // pay_rate/work_types and no longer drives role.
-  const appRole = appRoleOf(ctx);
+  const uiRole = uiRoleOf(ctx, member);
+  // Report the role this person actually has HERE, so the app shows them the
+  // right screen. It used to answer with Eesa's word alone, which is how an
+  // hourly employee's phone offered them their colleagues' approvals.
+  const appRole = uiRole === 'staff' ? 'staff' : appRoleOf(ctx);
   res.json({ ok: true, data: {
     appRole,                     // 'admin' | 'staff' | null (authority)
-    role: uiRoleOf(ctx),         // 'manager' | 'staff' | null (UI vocabulary)
+    role: uiRole,                // 'manager' | 'staff' | null (UI vocabulary)
     enrolled: appRole !== null,
     isPlatformAdmin: admin,
     member: member || null,
@@ -963,8 +985,11 @@ app.get('/api/ui/context', authMiddleware({ surface: 'ui' }), async (req, res) =
     data: {
       tenant: req.ctx.tenantId,
       name: req.ctx.email || req.ctx.sub,
-      appRole: appRoleOf(req.ctx),   // 'admin' | 'staff' | null (authority)
-      role: uiRoleOf(req.ctx),       // 'manager' | 'staff' | null
+      // Same roster rule as /api/me: this is what boot() branches on, so
+      // without it the plugin's own web UI still hands an hourly employee
+      // their colleagues' approvals screen.
+      appRole: uiRoleOf(req.ctx, member) === 'staff' ? 'staff' : appRoleOf(req.ctx),
+      role: uiRoleOf(req.ctx, member), // 'manager' | 'staff' | null
       isPlatformAdmin: admin,
     },
   });

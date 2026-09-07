@@ -57,3 +57,40 @@ describe('managerAudience', () => {
     );
   });
 });
+
+/// The same rule, applied to what a person is allowed to DO and which screen
+/// they are shown. server.js applies exactly this in withMember and /api/me.
+function rosterDemotes(member) {
+  return Boolean(member && member.active !== false && member.role === 'staff');
+}
+
+describe('the roster overrules Eesa downward, never upward', () => {
+  test('an hourly employee who carries ADMIN in Eesa is staff here', () => {
+    // Jeeva: role=ADMIN in Eesa core, role='staff' on the attendance roster,
+    // $10/hr. Approving their own colleagues' hours and pay.
+    assert.equal(rosterDemotes({ role: 'staff', active: true }), true);
+  });
+
+  test('an admin the roster has never heard of keeps everything', () => {
+    // chupy@admin.com is not a member here at all. Demoting them would leave
+    // this workspace with no attendance manager.
+    assert.equal(rosterDemotes(null), false);
+    assert.equal(rosterDemotes(undefined), false);
+  });
+
+  test('a roster manager is never demoted', () => {
+    assert.equal(rosterDemotes({ role: 'manager', active: true }), false);
+  });
+
+  test('an inactive staff row does not demote anybody', () => {
+    // A former employee who later became the administrator must not be held
+    // down by the row they left behind.
+    assert.equal(rosterDemotes({ role: 'staff', active: false }), false);
+  });
+
+  test('the roster never PROMOTES — that stays Eesa’s call', () => {
+    // rosterDemotes only ever answers "should this admin be knocked down".
+    // Nothing here can turn a staff member into a manager.
+    assert.equal(rosterDemotes({ role: 'manager' }), false);
+  });
+});
