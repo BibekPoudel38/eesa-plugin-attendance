@@ -470,7 +470,23 @@ async function todaysEvents(tenantId, employeeRef) {
 
 // Walk paired check_in→check_out intervals; an unmatched trailing check_in is
 // counted as an open interval up to "now" (so hours-worked ticks live).
-export function computeToday(events) {
+/// The longest an unfinished shift may bill.
+///
+/// A shift that never gets a check-out otherwise runs to whenever somebody
+/// happens to ask. On this workspace that produced 112 minutes for one day and
+/// 0 for another from the same defect — six unclosed shifts in thirty days,
+/// each recorded as whatever the clock said at the last punch. Neither number
+/// was the truth, and the admin timesheet pays the stored one.
+///
+/// Twelve hours matches SAME_PRESENCE_MS: longer than any real shift here, so
+/// it only ever trims a figure that was already wrong.
+const MAX_OPEN_SHIFT_MS = 12 * 60 * 60 * 1000;
+
+/// `now` is a parameter because this is not only ever asked about today.
+/// It used to read Date.now() unconditionally, so computing a PAST day that
+/// still had an open shift would have billed every hour since — the guard
+/// against that was a comment saying not to do it.
+export function computeToday(events, { now = Date.now(), maxOpenMs = MAX_OPEN_SHIFT_MS } = {}) {
   let openIn = null; // Date of an unmatched check_in
   let openEvent = null; // ...and the row it came from, for the detail view
   let firstIn = null;
@@ -512,7 +528,14 @@ export function computeToday(events) {
     }
   }
   const checkedIn = openIn != null;
-  if (checkedIn) ms += Date.now() - openIn.getTime();
+  // An unfinished shift bills what it has run, up to the ceiling. Past that,
+  // the number is not a measurement of anything and must not be paid as one.
+  let openTooLong = false;
+  if (checkedIn) {
+    const running = now - openIn.getTime();
+    openTooLong = running > maxOpenMs;
+    ms += Math.max(0, Math.min(running, maxOpenMs));
+  }
   return {
     checkedIn,
     since: checkedIn ? openIn : null,
@@ -520,6 +543,10 @@ export function computeToday(events) {
     zoneId: checkedIn && lastZone != null ? String(lastZone) : null,
     firstIn,
     lastOut,
+    // True when the shift never ended and the total above is a ceiling rather
+    // than a measurement. Whoever approves the day has to be told that.
+    openTooLong,
+    unclosed: checkedIn,
     totalMinutes: Math.max(0, Math.round(ms / 60000)),
   };
 }
@@ -1521,6 +1548,15 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
       approvedBy: r.approved_by || null,
       approvedAt: iso(r.approved_at),
       payRate: r.pay_rate == null ? null : Number(r.pay_rate),
+      // This day never got a check-out.
+      //
+      // day_summaries is only rewritten when a punch lands, so a day whose
+      // check-in was its last punch is frozen at the total it had moments
+      // after arriving. Six such days in thirty here: one stored 112 minutes,
+      // another stored zero, from the same defect — and this is the screen
+      // where somebody approves that number and pays it. The signal was
+      // already in the row (a first_in with no last_out); nothing read it.
+      unclosed: Boolean(r.first_in) && !r.last_out,
       // Whether the punches behind this timesheet could be confirmed on
       // location. Surfaced so the manager approves with that in view — it is
       // never a filter, an unverified day is still there to approve.
