@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/server.js",
     "check": "node --check src/server.js && node --check src/auth.js && node --check src/db.js && node --check src/mcp.js",
-    "test": "node --test test/"
+    "test": "node --test \"test/*.test.js\""
   },
   "dependencies": {
     "express": "^4.19.2",

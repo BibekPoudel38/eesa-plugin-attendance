@@ -92,6 +92,40 @@ export function metresBetween(aLat, aLng, bLat, bLng) {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
 }
 
+/// The fastest a person could plausibly be travelling between two punches.
+///
+/// 200 km/h is far above a commute and still nowhere near what a bad fix
+/// claims. On 7 Sep a phone recorded six punches in four seconds, alternating
+/// in/out, because one stale fix 32.4 km away kept being replayed between good
+/// ones — the same coordinates to five decimal places, the same 14 m accuracy,
+/// twice. That is 116,000 km/h. Each bogus pair closed a shift and opened
+/// another, and pushed a notification to the employee and to every manager.
+const MAX_PLAUSIBLE_MPS = 200000 / 3600;
+
+/// Could someone actually have got from the last punch to this one?
+///
+/// Returns the implied speed when the answer is no, and null when the question
+/// cannot be asked — no previous punch, either fix missing, or no time between
+/// them. Never throws: a punch must not be lost to a maths error.
+///
+/// The allowance adds both fixes' accuracy, so two fuzzy readings at the edge
+/// of a zone can never trip it; only a jump that no accuracy figure could
+/// explain does.
+export function implausibleMove(last, { lat, lng, accuracyM }) {
+  try {
+    if (!last || last.lat == null || last.lng == null || lat == null || lng == null) return null;
+    const seconds = (Date.now() - new Date(last.at).getTime()) / 1000;
+    if (!Number.isFinite(seconds) || seconds <= 0) return null;
+    const moved = metresBetween(Number(last.lat), Number(last.lng), Number(lat), Number(lng));
+    const slack = (Number(last.accuracy_m) || 0) + (Number(accuracyM) || 0);
+    if (moved <= MAX_PLAUSIBLE_MPS * seconds + slack) return null;
+    return { movedM: Math.round(moved), seconds: Math.round(seconds * 10) / 10,
+             kmh: Math.round((moved / seconds) * 3.6) };
+  } catch {
+    return null;
+  }
+}
+
 // Can this punch be trusted against the zone it claims?
 //
 //   verified   — the device sent a position and it lands inside the zone.
@@ -288,7 +322,7 @@ const coord = (v, max) => {
 /// the next morning.
 async function lastEvent(tenantId, employeeRef) {
   const rows = await q(
-    `select type, zone_id, for_work, at from events
+    `select type, zone_id, for_work, at, lat, lng, accuracy_m from events
       where tenant_id = $1 and employee_ref = $2
       order by at desc limit 1`,
     [tenantId, employeeRef],
@@ -363,6 +397,25 @@ export async function recordEvent(
   // claim a perfect fix and remove all the slack the verification allows.
   const rawAcc = num(accuracyM);
   const acc = rawAcc != null && rawAcc >= 0 ? Math.min(rawAcc, 100000) : null;
+
+  // A fix that could not have happened does not get to move the clock.
+  //
+  // Only for punches the phone made on its own. Somebody who taps check-in has
+  // told us they are here, and no reading contradicts a person standing in
+  // front of you — this must never block a punch a human actually made.
+  //
+  // The no-op guard above cannot catch this: the storm alternated in/out/in/out
+  // and no punch repeated the state of the one before it. Every one was
+  // "legitimate" in isolation. Only the geography gives it away.
+  const jump = String(source || 'geofence') === 'geofence'
+    ? implausibleMove(last, { lat: la, lng: ln, accuracyM: acc })
+    : null;
+  if (jump) {
+    return {
+      id: null, type, at: iso(last && last.at), duplicate: true,
+      ignored: 'implausible_location', jump,
+    };
+  }
   // Only a check-in can be pending: a check-out ends a shift someone either
   // vouched for or did not, and asking a manager to confirm a departure adds a
   // decision without adding any information.

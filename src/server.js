@@ -341,6 +341,21 @@ function spanOf(minutes) {
 /// Every send is fire-and-forget and the whole function is wrapped: this runs
 /// after the punch is already committed, so nothing in here is allowed to turn
 /// a recorded shift into a failed request. The caller does not await it.
+/// Say out loud that a punch was refused for being physically impossible.
+///
+/// Silence is the bug this whole system exists to remove. A refused punch is
+/// invisible everywhere else — there is no row, no notification, and the
+/// person's status is unchanged — so without this the only trace of a phone
+/// feeding us garbage fixes would be an absence, and an absence looks exactly
+/// like a quiet morning.
+function noteRefusedPunch(tenantId, employeeRef, type, ev) {
+  const j = ev.jump || {};
+  console.warn(
+    `[attendance] refused ${type} for ${employeeRef}: implied ${j.kmh} km/h `
+    + `(${j.movedM} m in ${j.seconds}s) — stale or mocked fix, not recorded`,
+  );
+}
+
 async function announcePunch(tenantId, employeeRef, type, status) {
   try {
     const isIn = type === 'check_in';
@@ -482,6 +497,7 @@ app.post('/api/checkIn', emp, async (req, res) => {
   // "entered" every time it re-registers a fence you are standing inside — six
   // in a morning is normal — and six identical pushes would be the fastest way
   // to get attendance notifications muted.
+  if (ev.ignored) noteRefusedPunch(req.ctx.tenantId, req.ctx.sub, 'check_in', ev);
   if (!ev.duplicate) {
     announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_in', status);
     if (ev.pending) askManagersToConfirm(req.ctx.tenantId, req.ctx.sub, ev, status);
@@ -496,6 +512,7 @@ app.post('/api/checkOut', emp, async (req, res) => {
   const outstanding = await db.unconfirmedOpenCheckIn(req.ctx.tenantId, req.ctx.sub).catch(() => null);
   const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', { zoneId, lat, lng, accuracyM, source });
   const status = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
+  if (ev.ignored) noteRefusedPunch(req.ctx.tenantId, req.ctx.sub, 'check_out', ev);
   if (!ev.duplicate) {
     announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_out', status);
     if (outstanding) {
