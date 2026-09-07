@@ -1443,6 +1443,19 @@ export async function managerRefs(tenantId) {
   return rows.map((r) => String(r.employee_ref));
 }
 
+/// Everyone the attendance roster explicitly calls staff.
+///
+/// A Set, because the only question ever asked of it is "is this person one of
+/// them", once per notification fan-out.
+export async function staffRefs(tenantId) {
+  const rows = await q(
+    `select employee_ref from memberships
+      where tenant_id = $1 and active = true and role = 'staff'`,
+    [tenantId],
+  );
+  return new Set(rows.map((r) => String(r.employee_ref)));
+}
+
 /// The display name for one person, for a notification that has to say who it
 /// is about. Falls back to a neutral phrase — a push reading "undefined checked
 /// in" is worse than one that is merely vague.

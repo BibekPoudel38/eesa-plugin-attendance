@@ -236,13 +236,29 @@ app.get('/api/present', async (req, res) => {
 ///
 /// Falls back to memberships only when the roster cannot be reached, because a
 /// stale audience is better than none.
+/// One correction to the above, paid for on 7 Sep: a person the attendance
+/// roster explicitly calls STAFF is not a manager here, whatever Eesa says.
+///
+/// Eesa's ADMIN role and this roster's role are different things and on the
+/// live workspace they disagree. An employee on an hourly rate carried ADMIN
+/// in Eesa, so every "X's location could not be confirmed" for every colleague
+/// went to their phone — where their colleagues' movements were none of their
+/// business. Eesa's word still promotes somebody the roster has never heard of
+/// (an admin who does not clock in themselves); it just cannot override the
+/// roster where the roster has spoken.
 async function managerAudience(tenantId) {
   try {
-    const roster = await fetchRoster(tenantId);
+    const [roster, staff, managers] = await Promise.all([
+      fetchRoster(tenantId),
+      db.staffRefs(tenantId).catch(() => new Set()),
+      db.managerRefs(tenantId).catch(() => []),
+    ]);
     const admins = roster
       .filter((u) => String(u.attendanceRole || '').toLowerCase() === 'admin')
-      .map((u) => String(u.id));
-    if (admins.length) return admins;
+      .map((u) => String(u.id))
+      .filter((id) => !staff.has(id));
+    const out = [...new Set([...managers.map(String), ...admins])];
+    if (out.length) return out;
   } catch {
     /* fall through */
   }
