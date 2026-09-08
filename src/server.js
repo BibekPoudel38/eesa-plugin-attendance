@@ -14,6 +14,7 @@ import { fetchRoster, rosterHealth } from './roster.js';
 import { nameMapOf, withNames } from './names.js';
 import { telemetry, flush as flushTelemetry } from './telemetry.js';
 import { notifyUser, notifyUsers } from './notify.js';
+import { recordEvent } from './telemetry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANIFEST = JSON.parse(readFileSync(join(__dirname, '..', 'manifest.json'), 'utf-8'));
@@ -392,6 +393,45 @@ function noteRefusedPunch(tenantId, employeeRef, type, ev) {
     `[attendance] refused ${type} for ${employeeRef}: implied ${j.kmh} km/h `
     + `(${j.movedM} m in ${j.seconds}s) — stale or mocked fix, not recorded`,
   );
+  recordEvent('attendance.punch.attempt', {
+    outcome: 'skip', tenantId, userRef: employeeRef,
+    errorCode: 'implausible_location',
+    errorMessage: `implied ${j.kmh} km/h (${j.movedM} m in ${j.seconds}s)`,
+    context: { punch_type: type, source: 'geofence', reason: 'implausible_location',
+               distance_m: j.movedM },
+  });
+}
+
+/// Say what a punch meant, from the server.
+///
+/// The phones cannot: 16 of the 18 registered iOS devices run a build older
+/// than the app's telemetry, so a whole shift on one of them was a single
+/// anonymous `POST /api/checkIn 200`. This runs regardless of app version,
+/// because it does not run on the app.
+///
+/// `duplicate` is recorded as a SKIP rather than dropped. A repeated arrival is
+/// the normal shape of a geofence — iOS re-fires "entered" on every fence
+/// re-registration — and the count of them is how you tell a noisy fence from a
+/// person who really did come and go.
+function notePunch(req, type, ev, status) {
+  const dup = Boolean(ev && ev.duplicate && !ev.ignored);
+  recordEvent(dup ? 'attendance.punch.attempt' : 'attendance.punch.recorded', {
+    outcome: dup ? 'skip' : 'ok',
+    tenantId: req.ctx.tenantId,
+    userRef: req.ctx.sub,
+    traceId: req.get('X-Eesa-Trace') || '',
+    errorCode: dup ? 'duplicate' : '',
+    context: {
+      punch_type: type,
+      source: String((req.body && req.body.source) || 'geofence'),
+      zone_id: (req.body && req.body.zoneId) || null,
+      zone_name: (status && status.zoneName) || null,
+      accuracy_m: (req.body && req.body.accuracyM) != null
+        ? Math.round(Number(req.body.accuracyM)) : null,
+      has_fix: Boolean(req.body && req.body.lat != null && req.body.lng != null),
+      reason: dup ? 'already_in_that_state' : null,
+    },
+  });
 }
 
 async function announcePunch(tenantId, employeeRef, type, status) {
@@ -536,6 +576,7 @@ app.post('/api/checkIn', emp, async (req, res) => {
   // in a morning is normal — and six identical pushes would be the fastest way
   // to get attendance notifications muted.
   if (ev.ignored) noteRefusedPunch(req.ctx.tenantId, req.ctx.sub, 'check_in', ev);
+  else notePunch(req, 'check_in', ev, status);
   if (!ev.duplicate) {
     announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_in', status);
     if (ev.pending) askManagersToConfirm(req.ctx.tenantId, req.ctx.sub, ev, status);
@@ -551,6 +592,7 @@ app.post('/api/checkOut', emp, async (req, res) => {
   const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', { zoneId, lat, lng, accuracyM, source });
   const status = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
   if (ev.ignored) noteRefusedPunch(req.ctx.tenantId, req.ctx.sub, 'check_out', ev);
+  else notePunch(req, 'check_out', ev, status);
   if (!ev.duplicate) {
     announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_out', status);
     if (outstanding) {

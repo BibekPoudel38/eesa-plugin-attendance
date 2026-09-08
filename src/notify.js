@@ -4,17 +4,43 @@
 const API_BASE = (process.env.EESA_API_BASE || 'https://eesa.ai/api/v1').replace(/\/+$/, '');
 const GATEWAY_SECRET = process.env.PLUGIN_GATEWAY_SECRET || '';
 
+import { recordEvent } from './telemetry.js';
+
 export async function notifyUser(tenantId, userId, { title, body = '', type = 'attendance', data = {} }) {
   if (!GATEWAY_SECRET || !tenantId || !userId || !title) return;
+  // Best-effort, but no longer SILENT.
+  //
+  // This never read the response status and swallowed every exception, so a
+  // push that never arrived looked exactly like one that did — on the message
+  // that tells somebody their shift was recorded. Still non-blocking and still
+  // unable to fail a punch; it just says what happened now.
+  let outcome = 'ok';
+  let code = '';
+  let detail = '';
   try {
-    await fetch(`${API_BASE}/gateway/notify/`, {
+    const res = await fetch(`${API_BASE}/gateway/notify/`, {
       method: 'POST',
       headers: { 'X-Eesa-Gateway-Secret': GATEWAY_SECRET, 'Content-Type': 'application/json' },
       body: JSON.stringify({ tenant: tenantId, userId, title, body, type, data }),
     });
-  } catch {
-    /* best-effort */
+    if (!res.ok) {
+      outcome = 'fail';
+      code = `http_${res.status}`;
+      detail = `the backend refused the notification (HTTP ${res.status})`;
+    }
+  } catch (e) {
+    outcome = 'fail';
+    code = 'unreachable';
+    detail = String((e && e.message) || e).slice(0, 200);
   }
+  recordEvent('attendance.notify.sent', {
+    outcome,
+    tenantId,
+    userRef: userId,
+    errorCode: code,
+    errorMessage: detail,
+    context: { kind: type },
+  });
 }
 
 /// Fan a notification out to several people at once — the managers who want to

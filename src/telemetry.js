@@ -45,20 +45,58 @@ export function routeOf(req) {
   return full.split('?')[0].slice(0, 255);
 }
 
+/// What HAPPENED, as opposed to which route was called.
+///
+/// The access log above can say `POST /api/checkIn 200` and nothing else — not
+/// who, not where, not whether the location could be confirmed. That was
+/// tolerable while the phones reported for themselves. They do not: 16 of the
+/// 18 registered iOS devices run a build older than the telemetry, so for those
+/// people a whole shift is one anonymous HTTP row. This says it on their
+/// behalf, and it works on every app version because it does not run on the
+/// phone at all.
+///
+/// Names must exist in the backend's closed list, and context keys in its
+/// allowlist, or the row is refused — deliberately the same rules the phones
+/// obey, so one table keeps one meaning.
+let events = [];
+
+export function recordEvent(name, { outcome = 'ok', tenantId = null, userRef = null,
+                                    traceId = '', errorCode = '', errorMessage = '',
+                                    context = {} } = {}) {
+  if (!SECRET) return;
+  events.push({
+    name,
+    at: new Date().toISOString(),
+    outcome,
+    surface: PLUGIN,
+    app_version: VERSION,
+    tenant_id: tenantId,
+    user_ref: userRef == null ? null : String(userRef),
+    trace_id: String(traceId || '').slice(0, 64),
+    error_code: String(errorCode || '').slice(0, 64),
+    error_message: String(errorMessage || '').slice(0, 2000),
+    context,
+  });
+  if (events.length > MAX_BUFFER) events = events.slice(-MAX_BUFFER);
+}
+
 export async function flush() {
-  if (!buffer.length || !SECRET) return;
+  if ((!buffer.length && !events.length) || !SECRET) return;
   const batch = buffer;
+  const evBatch = events;
   buffer = [];
+  events = [];
   try {
     await fetch(`${API_BASE}/telemetry/plugin-requests/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Eesa-Gateway-Secret': SECRET },
-      body: JSON.stringify({ requests: batch }),
+      body: JSON.stringify({ requests: batch, events: evBatch }),
     });
   } catch (e) {
     // Put them back, but never past the ceiling: a backend outage must not
     // turn into this process running out of memory.
     buffer = [...batch, ...buffer].slice(-MAX_BUFFER);
+    events = [...evBatch, ...events].slice(-MAX_BUFFER);
   }
 }
 
