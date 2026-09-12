@@ -552,9 +552,20 @@ async function flagUnconfirmedShift(tenantId, employeeRef, checkIn, status) {
   }
 }
 
+/// What the phone is allowed to tell the person. `recorded` is true only when a
+/// row exists — the phone used to announce an arrival on any 200, and a punch
+/// the plugin dropped as a repeat looked identical to one it filed.
+function punchOutcome(ev) {
+  return {
+    recorded: Boolean(ev && ev.id),
+    reason: (ev && ev.ignored) || (ev && ev.duplicate ? 'already_in_that_state' : null),
+    at: (ev && ev.at) || null,
+  };
+}
+
 // ---- Employee REST hot path (Flutter) — any enrolled user -----------------
 app.post('/api/checkIn', emp, async (req, res) => {
-  const { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true, source = 'geofence', workType = null } = req.body || {};
+  const { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true, source = 'geofence', workType = null, clientAt = null } = req.body || {};
   // Whether a human has to vouch for this shift. Read BEFORE the insert, because
   // it decides how the punch is stored — not just who gets told about it.
   const { requireConfirmation } = await db.getTenantSettings(req.ctx.tenantId).catch(() => ({}));
@@ -569,6 +580,7 @@ app.post('/api/checkIn', emp, async (req, res) => {
   const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', {
     zoneId, lat, lng, accuracyM, forWork, source, workType,
     requireConfirm: needsConfirm,
+    at: db.punchedAt(clientAt),
   });
   const status = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
   // A repeated arrival records nothing, so it announces nothing. The OS fires
@@ -581,15 +593,17 @@ app.post('/api/checkIn', emp, async (req, res) => {
     announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_in', status);
     if (ev.pending) askManagersToConfirm(req.ctx.tenantId, req.ctx.sub, ev, status);
   }
-  res.json({ ok: true, data: status });
+  res.json({ ok: true, data: { ...status, punch: punchOutcome(ev) } });
 });
 app.post('/api/checkOut', emp, async (req, res) => {
-  const { zoneId = null, lat = null, lng = null, accuracyM = null, source = 'geofence' } = req.body || {};
+  const { zoneId = null, lat = null, lng = null, accuracyM = null, source = 'geofence', clientAt = null } = req.body || {};
   // Look for the outstanding question BEFORE recording the departure: the punch
   // that closes the shift is also the moment the chance to confirm it in person
   // has gone.
   const outstanding = await db.unconfirmedOpenCheckIn(req.ctx.tenantId, req.ctx.sub).catch(() => null);
-  const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', { zoneId, lat, lng, accuracyM, source });
+  const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', {
+    zoneId, lat, lng, accuracyM, source, at: db.punchedAt(clientAt),
+  });
   const status = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
   if (ev.ignored) noteRefusedPunch(req.ctx.tenantId, req.ctx.sub, 'check_out', ev);
   else notePunch(req, 'check_out', ev, status);
@@ -604,7 +618,7 @@ app.post('/api/checkOut', emp, async (req, res) => {
       flagUnconfirmedShift(req.ctx.tenantId, req.ctx.sub, outstanding, status);
     }
   }
-  res.json({ ok: true, data: status });
+  res.json({ ok: true, data: { ...status, punch: punchOutcome(ev) } });
 });
 
 // Employee taps a LOCATION NFC tag with their OWN phone → check-in, or check-out

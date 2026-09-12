@@ -360,6 +360,29 @@ async function lastEvent(tenantId, employeeRef) {
 /// short side costs somebody their pay.
 const SAME_PRESENCE_MS = 12 * 60 * 60 * 1000;
 
+/// How far back a phone may say a punch happened. A punch that could not be
+/// sent when it happened — no signal, or an expired session — is queued and
+/// replayed, and it has to land on the shift it belongs to rather than at the
+/// moment the queue drained. Jeeva's Sep 8 shows the cost of getting this
+/// wrong: an arrival lost in the morning and a departure filed alone made a
+/// worked day read "0 min".
+///
+/// Bounded in both directions, because a handset clock is not authority to
+/// rewrite a timesheet. The future is never accepted beyond ordinary skew, and
+/// two days is far longer than the queue can plausibly hold a punch.
+const MAX_BACKDATE_MS = 48 * 60 * 60 * 1000;
+const MAX_CLOCK_SKEW_MS = 60 * 1000;
+
+export function punchedAt(clientAt, now = Date.now()) {
+  const ms = Number(clientAt);
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  const behind = now - ms;
+  if (behind < -MAX_CLOCK_SKEW_MS) return null;   // the future
+  if (behind > MAX_BACKDATE_MS) return null;      // too old to trust
+  return new Date(Math.min(ms, now)).toISOString();
+}
+
+
 export function isNoOpPunch(last, type, { zoneId, forWork }, now = Date.now()) {
   if (type === 'check_in') {
     if (forWork === false) return false;           // a real state change
@@ -378,7 +401,8 @@ export function isNoOpPunch(last, type, { zoneId, forWork }, now = Date.now()) {
 export async function recordEvent(
   tenantId, employeeRef, type,
   { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true,
-    source = 'geofence', workType = null, requireConfirm = false } = {},
+    source = 'geofence', workType = null, requireConfirm = false,
+    at = null } = {},
 ) {
   const la = coord(lat, 90);
   const ln = coord(lng, 180);
@@ -390,7 +414,12 @@ export async function recordEvent(
   // CURRENT status (not an error) keeps every caller idempotent: the phone can
   // re-send an arrival as often as the OS fires one and the record stays true.
   const last = await lastEvent(tenantId, employeeRef);
-  if (isNoOpPunch(last, type, { zoneId: zid, forWork })) {
+  // A queued punch is judged against the moment it HAPPENED, not the moment it
+  // finally got through. Judging a replayed 9am arrival against 2pm would call
+  // it a stale shift and open a second one.
+  const happenedAt = at ? Date.parse(at) : Date.now();
+  if (isNoOpPunch(last, type, { zoneId: zid, forWork },
+                  Number.isFinite(happenedAt) ? happenedAt : Date.now())) {
     return { id: null, type, at: iso(last && last.at), duplicate: true };
   }
   // Same trap: a missing accuracy must stay null, not become 0 — "0 m" would
@@ -423,16 +452,18 @@ export async function recordEvent(
   const hasConfirm = await ensureSettingsColumn();
   const rows = hasConfirm
     ? await q(
-        `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, accuracy_m, for_work, source, work_type, confirm_status)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning id, type, at`,
+        `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, accuracy_m, for_work, source, work_type, confirm_status, at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, coalesce($12::timestamptz, now())) returning id, type, at`,
         [tenantId, employeeRef, type, zid, la, ln, acc, forWork !== false,
-         String(source || 'geofence'), workType ? String(workType).slice(0, 120) : null, pending],
+         String(source || 'geofence'), workType ? String(workType).slice(0, 120) : null, pending,
+         at],
       )
     : await q(
-        `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, accuracy_m, for_work, source, work_type)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id, type, at`,
+        `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, accuracy_m, for_work, source, work_type, at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, coalesce($11::timestamptz, now())) returning id, type, at`,
         [tenantId, employeeRef, type, zid, la, ln, acc, forWork !== false,
-         String(source || 'geofence'), workType ? String(workType).slice(0, 120) : null],
+         String(source || 'geofence'), workType ? String(workType).slice(0, 120) : null,
+         at],
       );
   await upsertDaySummary(tenantId, employeeRef);
   // Gated on hasConfirm, not just on the request. If the DDL never landed (no
