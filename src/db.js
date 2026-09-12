@@ -1492,6 +1492,54 @@ export async function unconfirmedOpenCheckIn(tenantId, employeeRef) {
 /// is a manager) rather than from the roster, because the roster describes Eesa
 /// platform roles and a platform admin is not necessarily the person who runs
 /// the rota.
+/// Who hears about somebody else's shift.
+///
+/// The rule lives here, next to the two queries that feed it, so server.js and
+/// the tests share one definition. It used to be restated in the test file, and
+/// a second copy of "who may be told" is the same shape of mistake as a second
+/// copy of "who may see".
+///
+/// Narrowed 12 Sep: only people Eesa can still name. `memberships.role` carries
+/// ref 55, a dormant Apple review account marked 'manager', which has not been
+/// an Eesa user for some time — so every fan-out spent a request earning a 404,
+/// on every punch, for weeks. A recipient the roster cannot name can never
+/// receive anything, so including them only buys a failed request and a
+/// telemetry row that cries wolf.
+///
+/// The roster is still not allowed to PROMOTE: an admin the attendance roster
+/// has never heard of keeps everything, and a person it explicitly calls staff
+/// is not a manager here whatever Eesa says.
+export function audienceFor({ roster = [], staff = [], managers = [] } = {}) {
+  const isStaff = new Set([...staff].map(String));
+  const known = new Set([...roster].map((u) => String(u && u.id)));
+  const admins = [...roster]
+    .filter((u) => String((u && u.attendanceRole) || '').toLowerCase() === 'admin')
+    .map((u) => String(u.id))
+    .filter((id) => !isStaff.has(id));
+  const reachable = [...managers].map(String).filter((id) => known.has(id));
+  return [...new Set([...reachable, ...admins])];
+}
+
+/// How long a confirmation request needs before "nobody answered" is a fair
+/// thing to say to five people.
+///
+/// On 9 Sep a shift opened at 14:04:13 and closed at 14:04:53. Both alerts went
+/// out: managers were asked "Is Jeeva here? Confirm it" and then told, forty
+/// seconds later, that nobody had confirmed he was there. Nobody could have.
+/// Eleven notifications for forty seconds of work, the second batch scolding
+/// people for not answering a question they had barely received.
+///
+/// The RECORD is untouched — the check-in is still marked unconfirmed, which is
+/// true and belongs on the timesheet. This governs only whether anyone is
+/// woken about it.
+const CONFIRM_GRACE_MS = 10 * 60 * 1000;
+
+export function worthFlaggingUnconfirmed(checkInAt, now = Date.now()) {
+  const opened = Date.parse(checkInAt);
+  if (!Number.isFinite(opened)) return true;  // no time to judge by: say it
+  return now - opened >= CONFIRM_GRACE_MS;
+}
+
 export async function managerRefs(tenantId) {
   const rows = await q(
     `select employee_ref from memberships

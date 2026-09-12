@@ -7,15 +7,9 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-/// The rule, lifted out so it can be tested without a database or an HTTP
-/// round trip to the roster. server.js applies exactly this.
-function audience({ roster, staff, managers }) {
-  const admins = roster
-    .filter((u) => String(u.attendanceRole || '').toLowerCase() === 'admin')
-    .map((u) => String(u.id))
-    .filter((id) => !new Set(staff).has(id));
-  return [...new Set([...managers.map(String), ...admins])];
-}
+/// The rule itself, not a copy of it. It used to be restated here, which meant
+/// the test could keep passing while server.js did something else.
+import { audienceFor as audience } from '../src/db.js';
 
 // The live workspace on the day this was found.
 const ROSTER = [
@@ -38,8 +32,21 @@ describe('managerAudience', () => {
     assert.ok(audience({ roster: ROSTER, staff: STAFF, managers: MANAGERS }).includes('36'));
   });
 
-  test('a roster manager is always included', () => {
-    assert.ok(audience({ roster: ROSTER, staff: STAFF, managers: MANAGERS }).includes('55'));
+  test('a manager Eesa can no longer name is dropped', () => {
+    // Ref 55 is the dormant Apple review account. It is marked 'manager' in
+    // memberships and has not been an Eesa user for some time, so every punch
+    // spent a notification on it and got a 404 back — five of them in the
+    // fortnight this was found. A recipient nobody can address is not an
+    // audience, it is a failing request on a loop.
+    assert.equal(audience({ roster: ROSTER, staff: STAFF, managers: MANAGERS }).includes('55'), false);
+  });
+
+  test('a roster manager Eesa still knows is included', () => {
+    const out = audience({
+      roster: [{ id: 60, attendanceRole: 'staff' }],
+      staff: [], managers: ['60'],
+    });
+    assert.ok(out.includes('60'));
   });
 
   test('nobody is told twice', () => {
@@ -50,10 +57,21 @@ describe('managerAudience', () => {
     assert.deepEqual(out, ['55']);
   });
 
+  test('a Set of staff refs is accepted, as server.js passes one', () => {
+    const out = audience({
+      roster: [{ id: 39, attendanceRole: 'admin' }],
+      staff: new Set(['39']), managers: [],
+    });
+    assert.deepEqual(out, []);
+  });
+
   test('the whole audience, for this workspace', () => {
+    // One person, where it used to be two. The second was ref 55, which every
+    // punch notified and every notification 404'd on — the workspace's live
+    // audience was one real recipient and one guaranteed failure.
     assert.deepEqual(
       audience({ roster: ROSTER, staff: STAFF, managers: MANAGERS }).sort(),
-      ['36', '55'],
+      ['36'],
     );
   });
 });

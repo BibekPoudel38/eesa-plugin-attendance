@@ -276,11 +276,7 @@ async function managerAudience(tenantId) {
       db.staffRefs(tenantId).catch(() => new Set()),
       db.managerRefs(tenantId).catch(() => []),
     ]);
-    const admins = roster
-      .filter((u) => String(u.attendanceRole || '').toLowerCase() === 'admin')
-      .map((u) => String(u.id))
-      .filter((id) => !staff.has(id));
-    const out = [...new Set([...managers.map(String), ...admins])];
+    const out = db.audienceFor({ roster, staff, managers });
     if (out.length) return out;
   } catch {
     /* fall through */
@@ -519,6 +515,10 @@ async function askManagersToConfirm(tenantId, employeeRef, ev, status) {
 /// after it.
 async function flagUnconfirmedShift(tenantId, employeeRef, checkIn, status) {
   try {
+    // A shift nobody had time to confirm is not a shift nobody confirmed.
+    // The record still says unconfirmed; this only decides whether six people
+    // are woken to be told so.
+    if (!db.worthFlaggingUnconfirmed(checkIn && checkIn.at)) return;
     const { timezone } = await db.getTenantSettings(tenantId);
     const worked = spanOf(status.today && status.today.totalMinutes);
     const at = clockAt(checkIn.at, timezone);
