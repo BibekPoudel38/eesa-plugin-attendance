@@ -451,7 +451,10 @@ async function announcePunch(tenantId, employeeRef, type, status, extra = {}) {
       zone: status.zoneName || '',
       worked: spanOf(today.totalMinutes),
       minutes: today.totalMinutes || 0,
-      firstIn: firstInIso ? clockAt(firstInIso, timezone) : '',
+      // The review is of the DAY, so "in at" is the day's first arrival; the
+      // shift nobody vouched for is named separately, in the reason.
+      firstIn: today.firstIn ? clockAt(today.firstIn, timezone) : (firstInIso ? clockAt(firstInIso, timezone) : ''),
+      arrivedAt: extra.checkInAt ? clockAt(extra.checkInAt, timezone) : '',
       shiftMinutes: isIn ? null : shiftMinutes,
       pending: Boolean(extra.pending),
       unconfirmed: Boolean(extra.unconfirmed),

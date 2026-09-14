@@ -33,7 +33,8 @@ export function planFor({
   zone = '',
   worked = '0m',        // today's total, as text
   minutes = 0,          // today's total, as a number
-  firstIn = '',         // when the shift opened, on the workplace clock
+  firstIn = '',         // the day's first arrival, on the workplace clock
+  arrivedAt = '',       // the arrival nobody vouched for, when that is the reason
   shiftMinutes = null,  // how long the shift that just ended had run
   pending = false,      // check-in: did the record ask for confirmation?
   unconfirmed = false,  // check-out: was the check-in never confirmed?
@@ -93,7 +94,7 @@ export function planFor({
   if (shiftMinutes != null && shiftMinutes < MIN_SHIFT_MINUTES) return out;
   const needsALook = unconfirmed || unverified;
   const reason = unconfirmed
-    ? 'Nobody confirmed they were there.'
+    ? (arrivedAt ? `Nobody confirmed the ${arrivedAt} arrival.` : 'Nobody confirmed they were there.')
     : unverified ? placeReason(verification) : '';
   out.push({
     to: 'managers', kind: 'attendance_day_review',

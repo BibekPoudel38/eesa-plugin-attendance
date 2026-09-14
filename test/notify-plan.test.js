@@ -63,6 +63,17 @@ describe('what managers hear', () => {
     assert.equal(msg.data.unverified, 'true');
   });
 
+  test('the review names the arrival nobody vouched for, and keeps the day\'s first in', () => {
+    // Confirmed 3:44 arrival, out at 4:25, back at 4:30 with nobody answering,
+    // out at 4:42: the day is 3:44 → 4:42 and the question is about 4:30.
+    const [msg] = planFor({
+      ...base, type: 'check_out', firstIn: '3:44 AM', at: '4:42 AM',
+      unconfirmed: true, arrivedAt: '4:30 AM', shiftMinutes: 12, worked: '53m',
+    }).filter((m) => m.to === 'managers');
+    assert.match(msg.body, /^In at 3:44 AM, out at 4:42 AM/);
+    assert.match(msg.body, /Nobody confirmed the 4:30 AM arrival\./);
+  });
+
   test('the forty-second shift wakes nobody', () => {
     const plan = planFor({ ...base, type: 'check_out', shiftMinutes: 1 });
     assert.deepEqual(kinds(plan, 'managers'), []);
