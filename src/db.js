@@ -1039,7 +1039,27 @@ async function upsertDaySummary(tenantId, employeeRef) {
      values ($1, $2, (now() at time zone $6)::date, $3, $4, $5, now())
      on conflict (tenant_id, employee_ref, day)
      do update set first_in = excluded.first_in, last_out = excluded.last_out,
-                   total_minutes = excluded.total_minutes, updated_at = now()`,
+                   total_minutes = excluded.total_minutes, updated_at = now(),
+                   -- A decision stands until the numbers it was made on change.
+                   -- Approving 41 minutes at 4:25 and then having the person
+                   -- come back and work until eight left an "approved" day
+                   -- that nobody had seen; the day now goes back to the
+                   -- manager, and the check-out push tells them why.
+                   approval_status = case
+                     when day_summaries.total_minutes is distinct from excluded.total_minutes
+                       or day_summaries.last_out is distinct from excluded.last_out
+                       or day_summaries.first_in is distinct from excluded.first_in
+                     then 'pending' else day_summaries.approval_status end,
+                   approved_by = case
+                     when day_summaries.total_minutes is distinct from excluded.total_minutes
+                       or day_summaries.last_out is distinct from excluded.last_out
+                       or day_summaries.first_in is distinct from excluded.first_in
+                     then null else day_summaries.approved_by end,
+                   approved_at = case
+                     when day_summaries.total_minutes is distinct from excluded.total_minutes
+                       or day_summaries.last_out is distinct from excluded.last_out
+                       or day_summaries.first_in is distinct from excluded.first_in
+                     then null else day_summaries.approved_at end`,
     [tenantId, employeeRef, t.firstIn, t.lastOut, t.totalMinutes, tz],
   );
 }
@@ -1601,10 +1621,22 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
   if (from) { params.push(from); clauses.push(`ds.day >= $${params.length}`); }
   if (to) { params.push(to); clauses.push(`ds.day <= $${params.length}`); }
   if (status) { params.push(status); clauses.push(`ds.approval_status = $${params.length}`); }
+  // Still on the clock: a check-in on that day later than its last check-out.
+  // last_out alone cannot say — someone who left at 4:25 and came back at
+  // 4:30 keeps a last_out of 4:25 while the clock runs.
+  params.push(await tenantTz(tenantId));
+  const tzParam = params.length;
   const rows = await q(
     `select ds.employee_ref, ds.day, ds.first_in, ds.last_out, ds.total_minutes,
             ds.approval_status, ds.approved_by, ds.approved_at,
-            coalesce(m.name, '') as name, m.pay_rate, sc.expected_minutes
+            coalesce(m.name, '') as name, m.pay_rate, sc.expected_minutes,
+            exists (
+              select 1 from events e
+               where e.tenant_id = ds.tenant_id and e.employee_ref = ds.employee_ref
+                 and e.type = 'check_in' and e.for_work is distinct from false
+                 and (e.at at time zone $${tzParam})::date = ds.day
+                 and e.at > coalesce(ds.last_out, 'epoch'::timestamptz)
+            ) as open
        from day_summaries ds
        left join memberships m on m.tenant_id = ds.tenant_id and m.employee_ref = ds.employee_ref
        left join schedules  sc on sc.tenant_id = ds.tenant_id and sc.employee_ref = ds.employee_ref and sc.day = ds.day
@@ -1626,6 +1658,7 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
       approvalStatus: r.approval_status || 'pending',
       approvedBy: r.approved_by || null,
       approvedAt: iso(r.approved_at),
+      open: r.open === true,
       payRate: r.pay_rate == null ? null : Number(r.pay_rate),
       // This day never got a check-out.
       //
