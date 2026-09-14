@@ -454,6 +454,7 @@ async function announcePunch(tenantId, employeeRef, type, status, extra = {}) {
       pending: Boolean(extra.pending),
       unconfirmed: Boolean(extra.unconfirmed),
       unverified: Boolean(status.verification && status.verification !== 'verified'),
+      verification: status.verification || '',
       managerNotify,
       employeeRef,
       eventId: extra.eventId || '',

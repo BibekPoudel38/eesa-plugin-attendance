@@ -38,6 +38,7 @@ export function planFor({
   pending = false,      // check-in: did the record ask for confirmation?
   unconfirmed = false,  // check-out: was the check-in never confirmed?
   unverified = false,   // the location could not be confirmed
+  verification = '',    // how: 'outside' the zone, or 'unverified' — no usable fix
   managerNotify = 'exceptions',
   employeeRef = '',
   eventId = '',
@@ -80,7 +81,7 @@ export function planFor({
         to: 'managers', kind: 'attendance_manager',
         title: unverified ? `${who} — unconfirmed check-in` : `${who} checked in at ${at}`,
         body: unverified
-          ? `Recorded at ${at}${where}, but the location could not be confirmed.`
+          ? `Recorded at ${at}${where}. ${placeReason(verification)}`
           : `Arrived${where}.`,
         data: { punch: type, employeeRef: String(employeeRef), at, unverified: String(Boolean(unverified)) },
       });
@@ -93,7 +94,7 @@ export function planFor({
   const needsALook = unconfirmed || unverified;
   const reason = unconfirmed
     ? 'Nobody confirmed they were there.'
-    : unverified ? 'The location could not be confirmed.' : '';
+    : unverified ? placeReason(verification) : '';
   out.push({
     to: 'managers', kind: 'attendance_day_review',
     title: needsALook ? `${who} clocked ${worked} — needs a look` : `${who} clocked ${worked} today`,
@@ -111,4 +112,13 @@ export function planFor({
     },
   });
   return out;
+}
+
+/// Why a punch's location did not pass, in words a manager can act on. "Could
+/// not be confirmed" covered both and explained neither: a punch made across
+/// town and a punch with no fix at all call for different conversations.
+function placeReason(verification) {
+  return verification === 'outside'
+    ? 'A punch was recorded away from the work zone.'
+    : 'A punch could not be placed at the work zone.';
 }
