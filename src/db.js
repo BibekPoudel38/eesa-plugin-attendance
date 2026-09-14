@@ -1644,7 +1644,13 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
       order by ds.day desc, name`,
     params,
   );
-  const vi = await verificationIndex(tenantId, { from, to });
+  // The manager's flag "Nobody confirmed presence" is read off this list, and
+  // the list never carried the answer — the day review said "needs a look"
+  // and the card it opened showed nothing to look at.
+  const [vi, ci] = await Promise.all([
+    verificationIndex(tenantId, { from, to }),
+    confirmationIndex(tenantId, { from, to }),
+  ]);
   return rows.map((r) => {
     const day = dayStr(r.day);
     return {
@@ -1659,6 +1665,7 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
       approvedBy: r.approved_by || null,
       approvedAt: iso(r.approved_at),
       open: r.open === true,
+      confirmStatus: ci.get(`${r.employee_ref}|${day}`) || null,
       payRate: r.pay_rate == null ? null : Number(r.pay_rate),
       // This day never got a check-out.
       //
