@@ -354,11 +354,13 @@ async function shouldConfirm(tenantId, employeeRef, source) {
 /// string ends up next to the day totals, and those are already cut on the
 /// tenant's local midnight. A push saying "checked in at 01:03" for a 18:03
 /// shift is how you lose someone's trust in the whole timesheet.
+/// "3:44 AM", the way the app says it — a manager reads "In at 03:44" in a
+/// push and "3:44 AM" on the screen it opens, and those should be one clock.
 function clockAt(when, timezone) {
   try {
-    return new Intl.DateTimeFormat('en-GB', {
-      hour: '2-digit', minute: '2-digit', hour12: false, timeZone: timezone || 'UTC',
-    }).format(when instanceof Date ? when : new Date(when));
+    return new Intl.DateTimeFormat('en-US', {
+      hour: 'numeric', minute: '2-digit', hour12: true, timeZone: timezone || 'UTC',
+    }).format(when instanceof Date ? when : new Date(when)).replace(/\u202f/g, ' ');
   } catch {
     return '';
   }
