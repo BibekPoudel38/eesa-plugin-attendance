@@ -680,15 +680,18 @@ app.post('/api/admin/confirm', manager, async (req, res) => {
   }
   // Tell the employee either way. Being vouched for is worth knowing, and being
   // marked absent is something they must not first discover on a payslip.
-  const confirmed = result.confirmStatus === 'confirmed';
-  notifyUser(req.ctx.tenantId, result.employeeRef, {
-    title: confirmed ? 'Your shift was confirmed' : 'Your check-in was marked "not here"',
-    body: confirmed
-      ? 'A manager confirmed you are on site.'
-      : 'A manager recorded that you were not on site at check-in. Speak to them if that is wrong.',
-    type: 'attendance_confirmed',
-    data: { status: result.confirmStatus },
-  });
+  // Staff hear three things — reached, checked out, today's total — and a
+  // manager saying yes is the day going as expected, not news. Being marked
+  // not here IS news: it is their hours in question, and they should hear it
+  // from the system before they hear it from payroll.
+  if (result.confirmStatus !== 'confirmed') {
+    notifyUser(req.ctx.tenantId, result.employeeRef, {
+      title: 'Your check-in was marked "not here"',
+      body: 'A manager recorded that you were not on site at check-in. Speak to them if that is wrong.',
+      type: 'attendance_confirmed',
+      data: { status: result.confirmStatus },
+    });
+  }
   res.json({ ok: true, data: result });
 });
 
