@@ -9,6 +9,7 @@ import { dirname, join } from 'path';
 
 import { authMiddleware, verifyToken, requireGateway } from './auth.js';
 import * as db from './db.js';
+import { planFor } from './notify_plan.js';
 import { handleRpc } from './mcp.js';
 import { fetchRoster, rosterHealth } from './roster.js';
 import { nameMapOf, withNames } from './names.js';
@@ -430,125 +431,45 @@ function notePunch(req, type, ev, status) {
   });
 }
 
-async function announcePunch(tenantId, employeeRef, type, status) {
+async function announcePunch(tenantId, employeeRef, type, status, extra = {}) {
   try {
-    const isIn = type === 'check_in';
     const { timezone, managerNotify } = await db.getTenantSettings(tenantId);
-    const at = clockAt(isIn ? (status.since || new Date()) : new Date(), timezone);
-    const where = status.zoneName ? ` · ${status.zoneName}` : '';
-    const worked = status.today && status.today.totalMinutes;
-
-    // The employee. This is the disclosure that matters most: the geofence can
-    // punch someone in while their phone is in their pocket, and until now the
-    // only notification said "Are you here to work?" without ever confirming
-    // what was actually recorded, or when.
-    notifyUser(tenantId, employeeRef, {
-      title: isIn ? `Checked in at ${at}` : `Checked out at ${at}`,
-      body: isIn
-        ? `Your arrival was recorded${where}.`
-        : `${spanOf(worked)} today${where}.`,
-      type: isIn ? 'attendance_check_in' : 'attendance_check_out',
-      data: { punch: type, at, zone: status.zoneName || '', minutes: String(worked || 0) },
+    const isIn = type === 'check_in';
+    const punchedAtIso = isIn ? (status.since || new Date()) : new Date();
+    const today = status.today || {};
+    const firstInIso = extra.checkInAt || today.firstIn || null;
+    const shiftMinutes = firstInIso
+      ? Math.max(0, Math.round((Date.now() - new Date(firstInIso).getTime()) / 60000))
+      : null;
+    const plan = planFor({
+      type,
+      source: extra.source,
+      who: await personName(tenantId, employeeRef),
+      at: clockAt(punchedAtIso, timezone),
+      zone: status.zoneName || '',
+      worked: spanOf(today.totalMinutes),
+      minutes: today.totalMinutes || 0,
+      firstIn: firstInIso ? clockAt(firstInIso, timezone) : '',
+      shiftMinutes: isIn ? null : shiftMinutes,
+      pending: Boolean(extra.pending),
+      unconfirmed: Boolean(extra.unconfirmed),
+      unverified: Boolean(status.verification && status.verification !== 'verified'),
+      managerNotify,
+      employeeRef,
+      eventId: extra.eventId || '',
+      day: today.date || '',
     });
-
-    if (managerNotify === 'off') return;
-
-    // An exception is a punch a manager would actually do something about. Right
-    // now that means one whose location could not be confirmed — someone punched
-    // with no usable GPS fix, or outside the zone they claimed. "Late" and
-    // "never checked out" are deliberately NOT here: both need the day to be
-    // over (or a schedule to compare against) and belong to an end-of-day pass,
-    // not to the moment of the punch. Guessing at them with a hard-coded 9am
-    // would be wrong for every workspace that doesn't start at nine.
-    const unverified = status.verification && status.verification !== 'verified';
-    if (managerNotify === 'exceptions' && !unverified) return;
-
-    const managers = (await managerAudience(tenantId)).filter((r) => String(r) !== String(employeeRef));
-    if (!managers.length) return;
-    const who = await personName(tenantId, employeeRef);
-    notifyUsers(tenantId, managers, {
-      title: unverified
-        ? `${who} — unconfirmed ${isIn ? 'check-in' : 'check-out'}`
-        : `${who} ${isIn ? 'checked in' : 'checked out'} at ${at}`,
-      body: unverified
-        ? `Recorded at ${at}${where}, but the location could not be confirmed.`
-        : isIn ? `Arrived${where}.` : `${spanOf(worked)} today${where}.`,
-      type: 'attendance_manager',
-      data: { punch: type, employeeRef: String(employeeRef), at, unverified: String(Boolean(unverified)) },
-    });
+    let managers = null;
+    for (const item of plan) {
+      if (item.to === 'employee') {
+        notifyUser(tenantId, employeeRef, { ...item, type: item.kind });
+        continue;
+      }
+      managers ??= (await managerAudience(tenantId)).filter((r) => String(r) !== String(employeeRef));
+      if (managers.length) notifyUsers(tenantId, managers, { ...item, type: item.kind });
+    }
   } catch (e) {
     console.error('[attendance] punch notification failed:', e && e.message);
-  }
-}
-
-/// Ask the managers to vouch that this person is actually on site.
-///
-/// The clock is ALREADY running — confirmation never gates it. Someone who has
-/// walked into work should not have their pay wait on a manager reading a
-/// notification, and a system that stops the clock when nobody answers punishes
-/// the wrong person. What confirmation buys is a record of who vouched, and a
-/// loud gap when nobody did.
-async function askManagersToConfirm(tenantId, employeeRef, ev, status) {
-  try {
-    const managers = (await managerAudience(tenantId)).filter((r) => String(r) !== String(employeeRef));
-    if (!managers.length) return;
-    const { timezone } = await db.getTenantSettings(tenantId);
-    const who = await personName(tenantId, employeeRef);
-    const at = clockAt(ev.at || new Date(), timezone);
-    const where = status.zoneName ? ` at ${status.zoneName}` : '';
-    notifyUsers(tenantId, managers, {
-      title: `Is ${who} here?`,
-      body: `Checked in at ${at}${where}. Confirm it in Attendance — the clock is already running.`,
-      type: 'attendance_confirm',
-      data: { eventId: String(ev.id || ''), employeeRef: String(employeeRef), at },
-    });
-  } catch (e) {
-    console.error('[attendance] confirmation request failed:', e && e.message);
-  }
-}
-
-/// Nobody answered, and the shift is now over. Tell both sides, once.
-///
-/// Both — not just the manager — because the hours are the employee's. A shift
-/// that goes onto a timesheet marked unconfirmed can be queried later, and the
-/// person it belongs to is entitled to know that before payday rather than
-/// after it.
-async function flagUnconfirmedShift(tenantId, employeeRef, checkIn, status) {
-  try {
-    // A shift nobody had time to confirm is not a shift nobody confirmed.
-    // The record still says unconfirmed; this only decides whether six people
-    // are woken to be told so.
-    if (!db.worthFlaggingUnconfirmed(checkIn && checkIn.at)) return;
-    const { timezone } = await db.getTenantSettings(tenantId);
-    const worked = spanOf(status.today && status.today.totalMinutes);
-    const at = clockAt(checkIn.at, timezone);
-    const who = await personName(tenantId, employeeRef);
-
-    notifyUser(tenantId, employeeRef, {
-      title: `${worked} recorded, not confirmed`,
-      body: `Your check-in at ${at} was never confirmed by a manager. The hours are recorded — ask them to approve the day.`,
-      type: 'attendance_unconfirmed',
-      data: { minutes: String((status.today && status.today.totalMinutes) || 0), at },
-    });
-
-    const managers = (await managerAudience(tenantId)).filter((r) => String(r) !== String(employeeRef));
-    if (!managers.length) return;
-    notifyUsers(tenantId, managers, {
-      title: `${who} clocked ${worked} — unconfirmed`,
-      body: `Checked in at ${at} and has now left. Nobody confirmed they were there.`,
-      type: 'attendance_unconfirmed',
-      data: {
-        employeeRef: String(employeeRef),
-        minutes: String((status.today && status.today.totalMinutes) || 0),
-        at,
-        // The Approve button on this notification signs off a DAY, so the day
-        // has to travel with it. Without this the button draws, is tapped, and
-        // silently does nothing — worse than not offering it.
-        day: (status.today && status.today.date) || '',
-      },
-    });
-  } catch (e) {
-    console.error('[attendance] unconfirmed-shift alert failed:', e && e.message);
   }
 }
 
@@ -590,8 +511,9 @@ app.post('/api/checkIn', emp, async (req, res) => {
   if (ev.ignored) noteRefusedPunch(req.ctx.tenantId, req.ctx.sub, 'check_in', ev);
   else notePunch(req, 'check_in', ev, status);
   if (!ev.duplicate) {
-    announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_in', status);
-    if (ev.pending) askManagersToConfirm(req.ctx.tenantId, req.ctx.sub, ev, status);
+    announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_in', status, {
+      source, pending: ev.pending, eventId: ev.id,
+    });
   }
   res.json({ ok: true, data: { ...status, punch: punchOutcome(ev) } });
 });
@@ -608,15 +530,14 @@ app.post('/api/checkOut', emp, async (req, res) => {
   if (ev.ignored) noteRefusedPunch(req.ctx.tenantId, req.ctx.sub, 'check_out', ev);
   else notePunch(req, 'check_out', ev, status);
   if (!ev.duplicate) {
-    announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_out', status);
-    if (outstanding) {
-      // Settle it before anyone is told. The alert says the shift went
-      // unconfirmed, and it must be true of the record by the time it lands —
-      // not a claim the timesheet still contradicts because the punch is
-      // sitting in 'pending' waiting for an answer the day has run out of.
-      await db.markUnconfirmed(req.ctx.tenantId, outstanding.id).catch(() => null);
-      flagUnconfirmedShift(req.ctx.tenantId, req.ctx.sub, outstanding, status);
-    }
+    // Settle the open question BEFORE anyone is told. The alert says the shift
+    // went unconfirmed, and it must be true of the record by the time it lands.
+    if (outstanding) await db.markUnconfirmed(req.ctx.tenantId, outstanding.id).catch(() => null);
+    announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_out', status, {
+      source,
+      unconfirmed: Boolean(outstanding),
+      checkInAt: outstanding ? outstanding.at : null,
+    });
   }
   res.json({ ok: true, data: { ...status, punch: punchOutcome(ev) } });
 });
