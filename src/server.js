@@ -529,6 +529,8 @@ app.get('/api/admin/members', manager, async (req, res) => {
       name: u.name || (m && m.name) || '',
       email: u.email || (m && m.email) || '',
       role: (m && m.role) || null,
+      // Who has attendance is decided in Eesa; the page shows it, it doesn't set it.
+      attendanceRole: u.attendanceRole || null,
       payRate: (m && m.payRate) ?? null,
       // The saved job-type assignment has to come back, or the Team tab's
       // checkboxes render unticked for someone who HAS types assigned — and the
@@ -541,7 +543,7 @@ app.get('/api/admin/members', manager, async (req, res) => {
     if (!roster.some((u) => String(u.id) === m.employeeRef)) {
       rows.push({
         employeeRef: m.employeeRef, name: m.name, email: m.email,
-        role: m.role, payRate: m.payRate, workTypeIds: m.workTypeIds || [],
+        role: m.role, attendanceRole: null, payRate: m.payRate, workTypeIds: m.workTypeIds || [],
       });
     }
   }

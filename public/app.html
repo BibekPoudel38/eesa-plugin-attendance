@@ -259,6 +259,68 @@
        pickers stayed on screen underneath a selected preset. */
     [hidden] { display:none !important; }
 
+    /* ---- Timesheets: one week, one row per person ---- */
+    .weekbar { display:flex; align-items:center; gap:10px; margin:0 0 12px; }
+    .weekbar .btn { min-width:38px; justify-content:center; }
+    .weekbar .btn:disabled { opacity:.35; cursor:default; }
+    .weeklbl { flex:1; text-align:center; line-height:1.25; }
+    .weeklbl b { display:block; font-size:.95rem; }
+    .weeklbl span { font-size:.76rem; color:var(--muted); }
+    .tablewrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+    /* One grid for the header and every person, so the days line up. On a phone
+       the name and week total sit above the seven days, and the action below. */
+    .wk { display:grid; grid-template-columns:minmax(96px,1.3fr) repeat(7, minmax(52px,1fr)) 76px 128px; gap:6px; align-items:center; padding:8px 0; border-bottom:1px solid var(--line); font-size:.8rem; }
+    .wk.head { padding-top:0; font-size:.68rem; font-weight:650; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+    .wk .d { text-align:center; }
+    .wk.head .d span { display:block; font-size:.82rem; color:var(--ink); letter-spacing:0; }
+    .wk .who { font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .wk .tot { text-align:right; font-weight:700; font-variant-numeric:tabular-nums; }
+    .wk .act { text-align:right; white-space:nowrap; }
+    @media (max-width:640px) {
+      .wk { grid-template-columns:repeat(7, 1fr); gap:4px; padding:12px 0; }
+      .wk .who { grid-column:1 / 5; order:-2; font-size:.9rem; }
+      .wk .tot { grid-column:5 / 8; order:-1; }
+      .wk .act { grid-column:1 / -1; text-align:left; }
+      .wk .act:empty { display:none; }
+      .wk .act .btn { width:100%; justify-content:center; }
+      .wk.head .who, .wk.head .tot, .wk.head .act { display:none; }
+      .wk .cell { min-width:0; width:100%; padding:6px 1px; white-space:normal; line-height:1.15; font-size:.7rem; }
+    }
+    .cell {
+      font:inherit; font-size:.74rem; font-weight:650; min-width:50px; padding:7px 4px;
+      border-radius:9px; border:1px solid var(--line); background:var(--card-2); color:var(--ink);
+      cursor:pointer; font-variant-numeric:tabular-nums; white-space:nowrap;
+    }
+    .cell:hover { border-color:var(--primary); }
+    .cell.none { background:transparent; color:var(--faint); }
+    .cell.fix { background:var(--warn-weak); border-color:var(--warn); color:var(--warn); }
+    .cell.ok { background:var(--success-weak); border-color:transparent; color:var(--success); }
+    .cell.open { border-color:var(--success); }
+    .cell.open::before { content:''; display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--success); margin-right:4px; vertical-align:1px; }
+    .cell:disabled { cursor:default; opacity:.35; border-color:transparent; }
+    .cell.changed::after { content:'✎'; margin-left:3px; font-size:.85em; opacity:.6; }
+    .legendrow { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:.74rem; color:var(--muted); margin-top:12px; }
+    .legendrow i { font-style:normal; display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px; border:1px solid var(--line); }
+
+    /* ---- Fix times: a sheet over the page ---- */
+    .sheet-back { position:fixed; inset:0; z-index:60; background:rgba(9,14,18,.42); display:flex; align-items:flex-end; justify-content:center; }
+    .sheet {
+      background:var(--card); color:var(--ink); width:100%; max-width:520px; max-height:90vh; overflow:auto;
+      border-radius:18px 18px 0 0; padding:18px 18px calc(18px + env(safe-area-inset-bottom, 0px)); box-shadow:var(--shadow);
+    }
+    @media (min-width:640px) { .sheet-back { align-items:center; } .sheet { border-radius:18px; } }
+    .sheet h3 { margin:0; font-size:1.08rem; }
+    .sheet .sub { color:var(--muted); font-size:.84rem; margin:2px 0 14px; }
+    .sheet .times { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:12px 0 14px; }
+    .sheet .evidence { background:var(--warn-weak); border-radius:10px; padding:10px 12px; font-size:.84rem; line-height:1.45; }
+    .sheet .note { background:var(--card-2); border-radius:10px; padding:10px 12px; font-size:.82rem; color:var(--muted); }
+    .sheet .acts { display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; margin-top:4px; }
+    .sheet .acts .btn.primary { min-width:96px; justify-content:center; }
+    .sheet details { margin-top:14px; }
+    .sheet details summary { cursor:pointer; font-size:.82rem; color:var(--muted); font-weight:650; }
+    .toast.act { pointer-events:auto; display:flex; gap:14px; align-items:center; }
+    .toast.act .btn.link { padding:0; font-size:.86rem; }
+
     /* One segmented control, on one line — the shape Eesa uses for the same job,
        rather than a bag of pills that wraps to two rows and reads as clutter.
        It scrolls sideways instead of wrapping, so adding a period never changes
@@ -388,6 +450,41 @@
       }
       return 'custom';
     };
+    // The restaurant's calendar and clock, whatever device is looking.
+    const todayTZ = () => new Date().toLocaleDateString('en-CA', TZ ? { timeZone: TZ } : {});
+    const addDaysYmd = (d, n) => { const [y, m, dd] = d.split('-').map(Number); return new Date(Date.UTC(y, m - 1, dd + n)).toISOString().slice(0, 10); };
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const WDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const ymdParts = (d) => d.split('-').map(Number);
+    const wdayOf = (d) => { const [y, m, dd] = ymdParts(d); return new Date(Date.UTC(y, m - 1, dd)).getUTCDay(); };
+    const dayLabel = (d) => { const [, m, dd] = ymdParts(d); return `${WDAYS[wdayOf(d)]} ${dd} ${MONTHS[m - 1]}`; };
+    const rangeLabel = (f, t) => { const [, fm, fd] = ymdParts(f); const [, tm, td] = ymdParts(t); return fm === tm ? `${fd}–${td} ${MONTHS[tm - 1]}` : `${fd} ${MONTHS[fm - 1]} – ${td} ${MONTHS[tm - 1]}`; };
+    // Monday to Sunday, `offset` weeks from this one.
+    const weekRange = (offset = 0) => {
+      const t = todayTZ(); const back = (wdayOf(t) + 6) % 7;
+      const from = addDaysYmd(t, -back + offset * 7);
+      return [from, addDaysYmd(from, 6)];
+    };
+    // "15:25" on the restaurant's clock, for a time input.
+    const hmTZ = (iso) => iso ? new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(TZ ? { timeZone: TZ } : {}) }) : '';
+    // A wall-clock time on a restaurant day, as the instant it names.
+    const zonedIso = (day, hm) => {
+      const [y, m, d] = ymdParts(day); const [h, mi] = hm.split(':').map(Number);
+      const guess = Date.UTC(y, m - 1, d, h, mi);
+      const parts = new Intl.DateTimeFormat('en-US', { timeZone: TZ || 'UTC', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(guess));
+      const get = (k) => Number(parts.find((x) => x.type === k).value);
+      const asUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'));
+      return new Date(guess - (asUtc - guess)).toISOString();
+    };
+    // What a manager needs to know about a day, in their words.
+    const FLAG_TEXT = {
+      no_check_out: 'No check-out — the shift never ended.',
+      no_check_in: 'No check-in — a departure with no arrival before it.',
+      over_12h: 'Over 12 hours — longer than any real shift.',
+      left_later: 'Checked out by hand, but the phone saw them leave later.',
+      changed: 'Changed by a manager.',
+    };
+
     const initials = (s) => (String(s || '?').trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join('') || '?').toUpperCase();
     const metres = (m) => (m == null ? '' : m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`);
     const osm = (lat, lng) => `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=18/${lat}/${lng}`;
@@ -490,8 +587,16 @@
 
     let toastTimer;
     function toast(msg, isErr) {
-      const t = $('toast'); t.textContent = msg; t.classList.toggle('err', !!isErr);
+      const t = $('toast'); t.textContent = msg; t.classList.toggle('err', !!isErr); t.classList.remove('act');
       t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+    }
+    // A done action with a way back, instead of an "Are you sure?" before it.
+    function toastUndo(msg, onUndo) {
+      const t = $('toast');
+      t.classList.remove('err'); t.classList.add('act', 'show');
+      t.innerHTML = `<span>${esc(msg)}</span><button class="btn link" id="toastundo" type="button">Undo</button>`;
+      $('toastundo').onclick = async () => { t.classList.remove('show', 'act'); await onUndo(); };
+      clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show', 'act'), 7000);
     }
 
     // ---- theme: honor the host's light/dark (falls back to prefers-color-scheme) ----
@@ -522,7 +627,7 @@
     // Four admin sections, grouped by the job being done. The previous eight
     // split a single question across several screens: "what did this person
     // work" needed Logs, Approvals and Report, each with its own date range.
-    const ADMIN_TABS = ['today', 'timesheets', 'people', 'setup'];
+    const ADMIN_TABS = ['today', 'timesheets', 'setup'];
     const STAFF_TABS = ['me', 'history'];
     // How each Eesa-owned appRole reads in the header.
     const ROLE_LABEL = { admin: 'Admin', staff: 'Staff' };
@@ -530,6 +635,8 @@
     async function boot() {
       try {
         CTX = await api('/api/ui/context');
+        // Every time on this page is the restaurant's.
+        if (CTX.timezone) TZ = CTX.timezone;
         // appRole (Eesa authority) is what we branch on: 'admin' | 'staff' | null.
         // Older builds only sent `role` ('manager'|'staff'|null); fall back to it
         // so a mixed deploy still resolves.
@@ -793,58 +900,40 @@
     };
 
     // Everyone enrolled, for the "pick a person" controls.
-    const enrolled = async () => (await api('/api/admin/members')).filter((m) => m.role);
+    const enrolled = async () => (await api('/api/admin/members')).filter((m) => m.attendanceRole);
 
     // ==================== TODAY ====================
-    // One screen for "what is happening right now": the headline count, everyone
-    // on the map, the list with names and last-known location, and the manual
-    // punch for when someone's phone let them down.
+    // What is happening right now. Nothing here asks a question: arrivals record
+    // themselves, and a day that needs a fix is fixed from Timesheets.
     VIEWS.today = async () => {
-      const [presence, zones, waiting] = await Promise.all([
+      const [from, to] = weekRange(0);
+      const [presence, zones, week] = await Promise.all([
         api('/api/admin/presence'),
         api('/api/admin/zones').catch(() => []),
-        api('/api/admin/confirmations').catch(() => []),
+        api('/api/admin/approvals?' + new URLSearchParams({ from, to })).catch(() => []),
       ]);
       const rows = presence.employees || [];
       const people = rows.filter((p) => p.lastLocation);
       const inNow = rows.filter((r) => r.checkedIn).length;
+      const needsFix = week.filter((d) => d.needsFix).length;
       const hasMap = typeof window.L !== 'undefined';
 
-      // Ordered by what an admin opens this screen to DO, not by what the
-      // database has. Anything asking for a decision comes first; the map and
-      // the manual punch are reference and repair, and were pushing the list of
-      // people below the fold on a phone.
       $('view').innerHTML = `
-        ${waiting.length ? `<div class="card needs">
-          <h2>${ic('activity')} Waiting for you</h2>
-          <p class="lead">${waiting.length === 1 ? 'One person has' : `${waiting.length} people have`} checked in and nobody has confirmed they're on site. Their clock is already running — this only records who vouched for it.</p>
-          ${waiting.map((w) => `
-            <div class="rowitem confirmrow">
-              <div class="grow">
-                <div style="font-weight:650">${esc(w.name || w.employeeRef)}</div>
-                <div class="muted" style="font-size:.78rem">
-                  Checked in ${timeOf(w.at)}${w.zoneName ? ` · ${esc(w.zoneName)}` : ''} · ${w.minutesAgo < 60 ? `${w.minutesAgo} min ago` : `${Math.floor(w.minutesAgo / 60)}h ${w.minutesAgo % 60}m ago`}
-                </div>
-              </div>
-              <div class="confirmbtns">
-                <button class="btn small" data-no="${esc(w.id)}">Not here</button>
-                <button class="btn primary small" data-yes="${esc(w.id)}">Confirm</button>
-              </div>
-            </div>`).join('')}
+        ${needsFix ? `<div class="card needs">
+          <h2>${ic('activity')} ${needsFix === 1 ? 'One day needs' : `${needsFix} days need`} a fix</h2>
+          <p class="lead">This week has ${needsFix === 1 ? 'a day' : 'days'} with a missing or doubtful time. Fix ${needsFix === 1 ? 'it' : 'them'} and the week can be approved in one tap.</p>
+          <button class="btn primary" id="gofix">Open Timesheets</button>
         </div>` : ''}
 
         <div class="hero ${inNow ? 'hero--on' : ''}">
           <div class="hero__top">
-            <div class="hero__badge">${ic('activity')}</div>
-            <div>
-              <div class="hero__state">${inNow} on site${inNow ? '<span class="pulse"></span>' : ''}</div>
-              <div class="hero__sub">${inNow ? 'currently checked in' : 'nobody is checked in right now'}</div>
-            </div>
+            <div class="hero__badge"></div>
+            <div class="hero__state">${inNow ? `${inNow} at work now` : 'Nobody at work right now'}</div>
           </div>
           <div class="stats">
-            <div class="stat"><div class="stat__num num">${rows.length}</div><div class="stat__lbl">Active today</div></div>
+            <div class="stat"><div class="stat__num num">${rows.length}</div><div class="stat__lbl">Came in today</div></div>
             <div class="stat"><div class="stat__num num">${zones.length}</div><div class="stat__lbl">Work zones</div></div>
-            <div class="stat"><div class="stat__num num">${rows.filter((r) => r.verification !== 'verified').length}</div><div class="stat__lbl">Unconfirmed</div></div>
+            <div class="stat"><div class="stat__num num">${needsFix}</div><div class="stat__lbl">Need a fix</div></div>
           </div>
         </div>
 
@@ -854,53 +943,29 @@
             <div class="toolbar">
               <input class="search" id="pq" type="search" placeholder="Search name" autocomplete="off">
               <select id="pf">
-                <option value="">Everyone active today</option>
-                <option value="in">On the clock</option>
-                <option value="out">Checked out</option>
-                <option value="unverified">Location not confirmed</option>
+                <option value="">Everyone today</option>
+                <option value="in">At work</option>
+                <option value="out">Gone home</option>
               </select>
               <span class="count" id="pcount"></span>
             </div>
             <div id="pbody"></div>`
-            : empty('activity', 'Nobody has checked in yet today.')}
+            : empty('activity', 'Nobody has come in yet today.')}
         </div>
 
         ${hasMap && people.length ? `<div class="card">
           <h2>${ic('pin')} Where everyone is</h2>
           <div id="zmap"></div>
           <div class="legend">
-            <span class="k"><span class="dot" style="background:var(--success)"></span> On the clock (${inNow})</span>
-            <span class="k"><span class="dot" style="background:var(--muted)"></span> Checked out</span>
+            <span class="k"><span class="dot" style="background:var(--success)"></span> At work (${inNow})</span>
+            <span class="k"><span class="dot" style="background:var(--muted)"></span> Gone home</span>
             <span class="k"><span class="dot" style="background:transparent;border:2px solid #8aa0a8"></span> Work zone</span>
           </div>
-          <div class="map-hint">Each dot is where that person was when they <em>last punched</em> — phones report on arrival and departure, not continuously, so the label carries the time the position was taken.</div>
-        </div>` : ''}
+          <div class="map-hint">Each dot is where that person was when they arrived or left — phones report at the zone edge, not continuously.</div>
+        </div>` : ''}`;
 
-        <details class="card fold">
-          <summary>${ic('clock')} Add a punch by hand</summary>
-          <p class="lead">For a phone that was off, out of signal, or left at home. Recorded as entered by an admin, and marked as unconfirmed because there's no device location behind it.</p>
-          <div class="row">
-            <select id="mref" style="flex:1;min-width:170px"></select>
-            <select id="mtype" style="width:auto">
-              <option value="check_in">Checked in</option>
-              <option value="check_out">Checked out</option>
-            </select>
-            <button class="btn primary" id="msave">Add</button>
-          </div>
-        </details>`;
-
-      // --- confirmations ---
-      const answer = async (id, status) => {
-        try {
-          await api('/api/admin/confirm', { method: 'POST', body: { eventId: id, status } });
-          toast(status === 'confirmed' ? 'Confirmed' : 'Marked not here');
-          go('today');
-        } catch (e) { toast(e.message, true); }
-      };
-      $('view').querySelectorAll('[data-yes]').forEach((b) =>
-        b.onclick = () => answer(b.dataset.yes, 'confirmed'));
-      $('view').querySelectorAll('[data-no]').forEach((b) =>
-        b.onclick = () => answer(b.dataset.no, 'rejected'));
+      const gofix = $('gofix');
+      if (gofix) gofix.onclick = () => go('timesheets');
 
       if (rows.length) {
         const render = () => {
@@ -910,21 +975,19 @@
             if (qy && !`${r.name || ''} ${r.email || ''} ${r.employeeRef}`.toLowerCase().includes(qy)) return false;
             if (f === 'in' && !r.checkedIn) return false;
             if (f === 'out' && r.checkedIn) return false;
-            if (f === 'unverified' && r.verification === 'verified') return false;
             return true;
           });
           $('pcount').textContent = list.length === rows.length
             ? `${rows.length} ${rows.length === 1 ? 'person' : 'people'}`
             : `${list.length} of ${rows.length}`;
           $('pbody').innerHTML = list.length
-            ? `<table><thead><tr><th>Employee</th><th>Status</th><th>Since</th><th>Last known location</th></tr></thead><tbody>
+            ? `<div class="tablewrap"><table><thead><tr><th>Name</th><th></th><th>Since</th><th>Where</th></tr></thead><tbody>
               ${list.map((r) => `<tr>
-                <td><div style="font-weight:600">${esc(r.name || r.employeeRef)}</div>${r.name && r.email ? `<div class="muted" style="font-size:.74rem">${esc(r.email)}</div>` : ''}</td>
-                <td>${r.checkedIn ? '<span class="pill complete">In</span>' : '<span class="pill">Out</span>'}</td>
+                <td><div style="font-weight:600">${esc(r.name || r.employeeRef)}</div></td>
+                <td>${r.checkedIn ? '<span class="pill complete">At work</span>' : '<span class="pill">Gone home</span>'}</td>
                 <td class="num">${timeOf(r.at)}</td>
-                <td><div>${whereText(r.lastLocation)}</div>
-                    <div style="margin-top:4px">${vbadge(r.verification, r.verificationReason)} ${r.lastLocation ? `<span class="tag">as of ${esc(timeOf(r.lastLocation.at))}</span>` : ''}</div></td>
-              </tr>`).join('')}</tbody></table>`
+                <td>${whereText(r.lastLocation)}</td>
+              </tr>`).join('')}</tbody></table></div>`
             : empty('activity', 'Nobody matches those filters.');
         };
         $('pq').oninput = render;
@@ -932,302 +995,182 @@
         render();
       }
 
-      // Manual punch
-      const members = await enrolled().catch(() => []);
-      $('mref').innerHTML = members.map((m) => `<option value="${esc(m.employeeRef)}">${esc(m.name || m.employeeRef)}</option>`).join('')
-        || '<option value="">No enrolled staff</option>';
-      $('msave').onclick = async () => {
-        if (!$('mref').value) return toast('No staff to log for', true);
-        try {
-          await api('/api/admin/manual-entry', { method: 'POST', body: { employeeRef: $('mref').value, type: $('mtype').value } });
-          toast('Punch added');
-          go('today');
-        } catch (e) { toast(e.message, true); }
-      };
-
       if (hasMap && people.length) drawZoneMap(zones, people, { editable: false });
     };
 
     // ==================== TIMESHEETS ====================
-    // The money question, start to finish: what everyone worked over a period →
-    // one person's days → the punches behind a day, approving as you go.
+    // One week at a time. Everyone's days on one screen; a day that needs a fix
+    // says so; tap it, fix it, and approve the whole week in one tap. Nothing is
+    // approved day by day any more.
+    let WEEK = 0; // 0 = this week, -1 = last week
     VIEWS.timesheets = async () => {
+      const [from, to] = weekRange(WEEK);
+      const days = [0, 1, 2, 3, 4, 5, 6].map((i) => addDaysYmd(from, i));
+      const [approvals, members] = await Promise.all([
+        api('/api/admin/approvals?' + new URLSearchParams({ from, to })),
+        api('/api/admin/members').catch(() => []),
+      ]);
+      const today = todayTZ();
+      const byRef = new Map();
+      const person = (ref, name) => {
+        if (!byRef.has(ref)) byRef.set(ref, { ref, name: name || ref, days: {} });
+        return byRef.get(ref);
+      };
+      for (const m of members) {
+        if (m.attendanceRole) person(String(m.employeeRef), m.name || m.email);
+      }
+      for (const d of approvals) person(String(d.employeeRef), d.name).days[d.day] = d;
+      const people = [...byRef.values()].map((p) => {
+        const list = Object.values(p.days);
+        const settled = list.filter((d) => !d.open);
+        return {
+          ...p,
+          total: settled.reduce((n, d) => n + d.totalMinutes, 0),
+          fix: list.filter((d) => d.needsFix).length,
+          toApprove: settled.filter((d) => d.approvalStatus !== 'approved').length,
+          any: list.length > 0,
+        };
+      }).sort((x, y) => (y.any - x.any) || String(x.name).localeCompare(String(y.name)));
+
+      const cell = (p, day) => {
+        const d = p.days[day];
+        const attrs = `data-ref="${esc(p.ref)}" data-day="${day}"`;
+        if (!d) return `<button class="cell none" ${attrs} ${day > today ? 'disabled' : ''} title="Nothing recorded">–</button>`;
+        if (d.open) return `<button class="cell open" ${attrs} title="At work now">${dur(d.totalMinutes)}</button>`;
+        if (d.needsFix) return `<button class="cell fix" ${attrs} title="Needs a fix">${d.totalMinutes ? dur(d.totalMinutes) : 'Fix'}</button>`;
+        const edited = d.corrected ? ' changed' : '';
+        if (d.approvalStatus === 'approved') return `<button class="cell ok${edited}" ${attrs} title="Approved${d.corrected ? ' · changed by a manager' : ''}">${dur(d.totalMinutes)}</button>`;
+        return `<button class="cell${edited}" ${attrs} ${d.corrected ? 'title="Changed by a manager"' : ''}>${dur(d.totalMinutes)}</button>`;
+      };
+      const action = (p) => {
+        if (p.fix) return `<span class="pill pending">Fix ${p.fix}</span>`;
+        if (p.toApprove) return `<button class="btn small primary" data-approve="${esc(p.ref)}">Approve week</button>`;
+        if (p.any) return `<span class="pill approved">Approved</span>`;
+        return '';
+      };
+      const title = WEEK === 0 ? 'This week' : WEEK === -1 ? 'Last week' : `${-WEEK} weeks ago`;
+
       $('view').innerHTML = `<div class="card">
         <h2>${ic('chart')} Timesheets</h2>
-        <p class="lead">Hours worked over a period, what's still waiting on you, and what that comes to in pay. Click anyone to see their days and approve them.</p>
-        ${rangeBar('ts')}
-        <div class="row" style="margin:-4px 0 12px">
-          <label class="wtchk"><input type="checkbox" id="tspend"> Only people awaiting approval</label>
-          <label class="wtchk"><input type="checkbox" id="tsdetail"> Show pay &amp; schedule</label>
-          <button class="btn small" id="tscsv" style="margin-left:auto">${ic('download')} Export CSV</button>
+        <div class="weekbar">
+          <button class="btn small" id="wkprev" type="button" aria-label="Previous week">‹</button>
+          <div class="weeklbl"><b>${title}</b><span>${rangeLabel(from, to)}</span></div>
+          <button class="btn small" id="wknext" type="button" aria-label="Next week" ${WEEK >= 0 ? 'disabled' : ''}>›</button>
         </div>
-        <div id="tstot"></div>
-        <div id="tsout" class="muted">Loading…</div>
+        ${people.length ? `<div class="wkgrid">
+          <div class="wk head"><div class="who">Name</div>${days.map((d) => `<div class="d">${WDAYS[wdayOf(d)]}<span>${ymdParts(d)[2]}</span></div>`).join('')}<div class="tot">Week</div><div class="act"></div></div>
+          ${people.map((p) => `<div class="wk">
+            <div class="who">${esc(p.name)}</div>
+            ${days.map((d) => `<div class="d">${cell(p, d)}</div>`).join('')}
+            <div class="tot">${p.total ? dur(p.total) : '—'}</div>
+            <div class="act">${action(p)}</div>
+          </div>`).join('')}
+        </div>
+        <div class="legendrow">
+          <span><i style="background:var(--warn-weak);border-color:var(--warn)"></i>Needs a fix</span>
+          <span><i style="background:var(--success-weak);border-color:transparent"></i>Approved</span>
+          <span><i style="border-color:var(--success)"></i>At work now</span>
+          <span>✎ Changed by a manager</span>
+          <span>Tap any day to see or fix its times.</span>
+        </div>` : empty('users', 'Nobody has attendance yet.')}
       </div>`;
 
-      const run = async () => {
-        $('tsout').innerHTML = '<span class="muted">Loading…</span>';
-        const q = new URLSearchParams({ from: RANGE.from, to: RANGE.to });
-        const [rows, approvals] = await Promise.all([
-          api('/api/admin/report?' + q),
-          api('/api/admin/approvals?' + q).catch(() => []),
-        ]);
-        // How many days per person still need a decision — the thing that tells
-        // an admin where to go next, which the old Report never showed.
-        const pending = new Map();
-        for (const a of approvals) {
-          if (a.approvalStatus === 'pending' && a.totalMinutes > 0) {
-            pending.set(String(a.employeeRef), (pending.get(String(a.employeeRef)) || 0) + 1);
-          }
-        }
-        const onlyPending = $('tspend').checked;
-        const list = onlyPending ? rows.filter((r) => pending.get(String(r.employeeRef))) : rows;
-        const totalPending = [...pending.values()].reduce((a, b) => a + b, 0);
-        $('tsc').textContent = totalPending
-          ? `${totalPending} day${totalPending === 1 ? '' : 's'} awaiting approval`
-          : 'nothing awaiting approval';
-
-        // The number the period is actually for. A table of per-person rows never
-        // answers "what did this month cost" without the reader adding a column
-        // up by hand, which is exactly the arithmetic a report exists to remove.
-        const sum = (f) => list.reduce((a, r) => a + (Number(r[f]) || 0), 0);
-        const tWorked = sum('totalMinutes');
-        const tApproved = sum('approvedMinutes');
-        const tExpected = sum('expectedMinutes');
-        const tPay = list.reduce((a, r) => a + (Number(r.approvedPay) || 0), 0);
-        const anySchedule = list.some((r) => r.hasSchedule);
-        $('tstot').innerHTML = list.length ? `
-          <div class="stats" style="margin:0 0 14px">
-            <div class="stat" style="background:var(--card-2)">
-              <div class="stat__num num">${dur(tWorked)}</div><div class="stat__lbl">Hours worked</div></div>
-            <div class="stat" style="background:var(--card-2)">
-              <div class="stat__num num">${dur(tApproved)}</div><div class="stat__lbl">Approved</div></div>
-            ${anySchedule ? `<div class="stat" style="background:var(--card-2)">
-              <div class="stat__num num">${dur(tExpected)}</div><div class="stat__lbl">Expected</div></div>` : ''}
-            <div class="stat" style="background:var(--card-2)">
-              <div class="stat__num num">${list.length}</div><div class="stat__lbl">People</div></div>
-            ${tPay > 0 ? `<div class="stat" style="background:var(--card-2)">
-              <div class="stat__num num">$${tPay.toFixed(2)}</div><div class="stat__lbl">Approved pay</div></div>` : ''}
-          </div>` : '';
-
-        // Three columns by default — who, how many days, how many hours — because
-        // that is the whole question most of the time. Expected / difference /
-        // approved / pay are four more columns that made this unreadable on a
-        // phone to answer a question only payroll week asks, so they are behind
-        // a toggle rather than always on.
-        const detail = $('tsdetail').checked;
-        $('tsout').innerHTML = list.length ? `<table>
-          <thead><tr><th>Name</th><th>Days</th><th>Worked</th>${detail
-            ? '<th>Expected</th><th>Diff</th><th>Approved</th><th>Pay</th>' : ''}<th></th></tr></thead>
-          <tbody>${list.map((r, i) => {
-            const p = pending.get(String(r.employeeRef)) || 0;
-            const diff = r.hasSchedule
-              ? `<span class="${r.differenceMinutes < 0 ? 'err' : 'ok'}">${r.differenceMinutes > 0 ? '+' : ''}${hrs(r.differenceMinutes)}</span>`
-              : '<span class="muted">—</span>';
-            return `<tr>
-              <td><div style="font-weight:600">${esc(r.name || r.employeeRef)}</div>
-                  ${p ? `<span class="pill pending">${p} pending</span>` : ''}</td>
-              <td class="num">${r.days}</td>
-              <td class="num"><strong>${dur(r.totalMinutes)}</strong></td>
-              ${detail ? `
-              <td class="num">${r.hasSchedule ? dur(r.expectedMinutes) : '<span class="muted">—</span>'}</td>
-              <td class="num">${diff}</td>
-              <td class="num">${dur(r.approvedMinutes)}</td>
-              <td class="num">${r.approvedPay == null ? '<span class="muted">—</span>' : '$' + r.approvedPay.toFixed(2)}</td>` : ''}
-              <td><button class="btn small" id="ts${i}">Open</button></td>
-            </tr>`;
-          }).join('')}</tbody></table>`
-          : empty('chart', onlyPending ? 'Nothing is waiting for approval in this period.' : 'No attendance in this period.');
-
-        list.forEach((r, i) => {
-          const b = $('ts' + i);
-          if (b) b.onclick = () => personTimesheet(String(r.employeeRef), r.name);
-        });
-      };
-      // Download through fetch, not a plain link: the export is bearer-authed and
-      // an <a href> cannot carry the token. The blob is revoked straight after
-      // the click so the file isn't pinned in memory for the session.
-      $('tscsv').onclick = async () => {
-        const btn = $('tscsv');
-        btn.disabled = true;
+      $('wkprev').onclick = () => { WEEK -= 1; go('timesheets'); };
+      $('wknext').onclick = () => { if (WEEK < 0) { WEEK += 1; go('timesheets'); } };
+      $('view').querySelectorAll('button.cell').forEach((b) => b.onclick = () => {
+        const p = byRef.get(b.dataset.ref);
+        openDay(p ? p.name : b.dataset.ref, b.dataset.ref, b.dataset.day, p && p.days[b.dataset.day]);
+      });
+      $('view').querySelectorAll('button[data-approve]').forEach((b) => b.onclick = async () => {
+        const p = people.find((x) => x.ref === b.dataset.approve);
+        b.disabled = true;
         try {
-          const res = await fetch('/api/admin/export.csv?' + new URLSearchParams({ from: RANGE.from, to: RANGE.to }), {
-            headers: { Authorization: 'Bearer ' + TOKEN },
-          });
-          if (!res.ok) throw new Error(`Export failed (${res.status})`);
-          const url = URL.createObjectURL(await res.blob());
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `attendance_${RANGE.from}_${RANGE.to}.csv`;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          URL.revokeObjectURL(url);
-          toast('Export downloaded');
-        } catch (e) {
-          toast(e.message, true);
-        } finally {
-          btn.disabled = false;
-        }
-      };
-      $('tsdetail').onchange = run;
-      bindRange('ts', run);
-      $('tspend').onchange = run;
-      await run();
+          const r = await api('/api/admin/approvals/week', { method: 'POST', body: { employeeRef: b.dataset.approve, from, to } });
+          toast(`Approved · ${p ? p.name : ''} · ${dur(r.totalMinutes)}`);
+          go('timesheets');
+        } catch (e) { b.disabled = false; toast(e.message, true); }
+      });
     };
 
-    // One person, one period: every day, its verification, its approval state,
-    // and the punches behind it. Replaces the old Logs person page AND the
-    // Approvals row-per-day table, which each showed half of this.
-    async function personTimesheet(ref, name) {
-      $('view').innerHTML = `<div class="card"><div class="muted">Loading ${esc(name || ref)}…</div></div>`;
-      const q = new URLSearchParams({ employeeRef: ref, from: RANGE.from, to: RANGE.to });
-      const [detail, approvals] = await Promise.all([
-        api('/api/admin/employee-report?' + q),
-        api('/api/admin/approvals?' + new URLSearchParams({ from: RANGE.from, to: RANGE.to })).catch(() => []),
-      ]);
-      const mine = new Map(approvals.filter((a) => String(a.employeeRef) === ref).map((a) => [a.day, a]));
-      const days = (detail.days || []).filter((d) => d.firstIn || d.totalMinutes > 0);
+    // Fix times: one day, with what the phone saw, the times to save, and Undo.
+    async function openDay(name, ref, day, d) {
+      const back = document.createElement('div');
+      back.className = 'sheet-back';
+      const close = () => back.remove();
+      const hand = (d && d.handOuts) || [];
+      const flags = ((d && d.flags) || []).filter((f) => FLAG_TEXT[f]);
+      // The latest moment they were really there: the phone's exit after a hand
+      // check-out, or a later departure if they came back (Jeeva, 15 Sep: out by
+      // hand 10:51, left 15:25, back 15:33, gone 17:17 — the day ends at 17:17).
+      const suggestOut = d && [d.leftZoneAt, d.lastOut].filter(Boolean).sort().pop();
+      back.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="fxttl">
+        <h3 id="fxttl">${esc(name)}</h3>
+        <div class="sub">${esc(dayLabel(day))}${!d ? ' · nothing recorded' : `${d.totalMinutes ? ` · ${dur(d.totalMinutes)}` : ''}${d.open ? ' · at work now' : ''}${d.corrected ? ' · changed by a manager' : ''}`}</div>
+        ${hand.length ? `<div class="evidence">${hand.map((h) =>
+          `Checked out by hand at <b>${esc(timeOf(h.checkedOutAt))}</b>. The phone left the zone at <b>${esc(timeOf(h.leftZoneAt))}</b>.`).join('<br>')}${
+          d.lastOut && d.lastOut > d.leftZoneAt ? `<br>Last left at <b>${esc(timeOf(d.lastOut))}</b>.` : ''}</div>` : ''}
+        ${flags.length && !hand.length ? `<div class="note">${flags.map((f) => esc(FLAG_TEXT[f])).join('<br>')}</div>` : ''}
+        <div class="times">
+          <label class="field">In<input type="time" id="fxin" value="${d && d.firstIn ? hmTZ(d.firstIn) : ''}"></label>
+          <label class="field">Out<input type="time" id="fxout" value="${suggestOut ? hmTZ(suggestOut) : ''}"></label>
+        </div>
+        <div class="acts">
+          ${d && d.corrected ? '<button class="btn" id="fxundo" type="button">Use the phone’s times</button>' : ''}
+          <button class="btn" id="fxcancel" type="button">Cancel</button>
+          <button class="btn primary" id="fxsave" type="button">Save</button>
+        </div>
+        ${d ? `<details><summary>What the phone recorded</summary><div id="fxevents" class="muted" style="margin-top:8px">Loading…</div></details>` : ''}
+      </div>`;
+      document.body.appendChild(back);
+      back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
+      $('fxcancel').onclick = close;
+      const onKey = (e) => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); } };
+      document.addEventListener('keydown', onKey);
+      $('fxin').focus();
 
-      const render = () => {
-        $('view').innerHTML = `
-          <div class="card">
-            <button class="btn small" id="back" style="margin-bottom:10px">← All timesheets</button>
-            <h2>${ic('user')} ${esc(detail.name || name || ref)}</h2>
-            ${rangeBar('pt')}
-            <div class="stats" style="margin-top:10px">
-              <div class="stat"><div class="stat__num num">${dur(detail.totalMinutes)}</div><div class="stat__lbl">Worked</div></div>
-              <div class="stat"><div class="stat__num num">${detail.daysWorked}</div><div class="stat__lbl">Days</div></div>
-              <div class="stat"><div class="stat__num num">${days.filter((d) => (mine.get(d.date) || {}).approvalStatus === 'pending').length}</div><div class="stat__lbl">To approve</div></div>
-            </div>
-          </div>
-          <div class="card">
-            <h2>${ic('calendar')} Days</h2>
-            ${days.length ? `<table>
-              <thead><tr><th>Date</th><th>In</th><th>Out</th><th>Worked</th><th>Location</th><th>Presence</th><th>Approval</th><th></th></tr></thead>
-              <tbody>${days.map((d, i) => {
-                const a = mine.get(d.date) || {};
-                const st = a.approvalStatus || 'pending';
-                return `<tr>
-                  <td style="font-weight:600">${esc(dateNice(d.date))}</td>
-                  <td class="num">${timeOf(d.firstIn)}</td>
-                  <td class="num">${d.lastOut ? timeOf(d.lastOut) : `<span class="muted">${d.status === 'open' ? 'still in' : '—'}</span>`}</td>
-                  <td class="num"><strong>${dur(d.totalMinutes)}</strong></td>
-                  <td>${vbadge(d.verification)}</td>
-                  <td>${cbadge(d.confirmStatus)}</td>
-                  <td><span class="pill ${esc(st)}">${esc(st)}</span></td>
-                  <td style="white-space:nowrap">
-                    <button class="btn link" data-day="${esc(d.date)}">Punches</button>
-                    ${st !== 'approved' ? `<button class="btn link" data-appr="approved" data-d="${esc(d.date)}">Approve</button>` : ''}
-                    ${st !== 'rejected' ? `<button class="btn link" style="color:var(--danger)" data-appr="rejected" data-d="${esc(d.date)}">Reject</button>` : ''}
-                  </td>
-                </tr>
-                <tr class="wtrow" id="ev-${esc(d.date)}" style="display:none"><td colspan="8"></td></tr>`;
-              }).join('')}</tbody></table>`
-              : empty('calendar', 'Nothing recorded in this period.')}
-          </div>`;
-
-        $('back').onclick = () => go('timesheets');
-
-        // The same period control as everywhere else, on the screen where the
-        // question is asked most: this person's days. It was a line of static
-        // text, so changing the month meant backing out to the list, changing
-        // it there, and drilling in again — three steps to answer "what about
-        // last month". Changing it here reloads this person in place, and the
-        // shared RANGE means the list you go back to has moved with you.
-        bindRange('pt', () => personTimesheet(ref, name));
-
-        $('view').querySelectorAll('button[data-day]').forEach((b) => {
-          b.onclick = async () => {
-            const day = b.dataset.day;
-            const row = $('ev-' + day);
-            if (row.style.display !== 'none') { row.style.display = 'none'; b.textContent = 'Punches'; return; }
-            row.style.display = '';
-            b.textContent = 'Hide';
-            const cell = row.firstElementChild;
-            cell.innerHTML = '<span class="muted" style="font-size:.8rem">Loading…</span>';
-            try {
-              const evs = await api('/api/admin/events?' + new URLSearchParams({ employeeRef: ref, from: day, to: day }));
-              // A hand-typed punch gets a way to undo it; a device punch does
-              // not, because the server will refuse and the button would only
-              // teach people that buttons lie. See db.deleteManualEvent.
-              cell.innerHTML = evs.length
-                ? evs.slice().reverse().map((e) => eventHtml(e) + (e.source === 'manual'
-                    ? `<div style="margin:-6px 0 10px 34px"><button class="btn link" style="color:var(--danger);padding:0" data-del="${esc(e.id)}">Remove this entry</button></div>`
-                    : '')).join('')
-                : '<span class="muted" style="font-size:.8rem">No individual punches recorded for this day.</span>';
-              // Confirm in the page, not with window.confirm().
-              //
-              // This UI runs inside the app's WKWebView, which suppresses native
-              // JS dialogs unless the host implements onJsConfirm — the plugin
-              // webview does not. confirm() therefore returned false every time
-              // and the button silently did nothing, which is the worst possible
-              // failure for a destructive control: it looks broken, so people
-              // press it again.
-              //
-              // Two taps on the same button is also simply better here. It keeps
-              // the decision where the thing being deleted is, needs no modal,
-              // and reverts on its own if the second tap never comes.
-              cell.querySelectorAll('[data-del]').forEach((btn) => {
-                let armed = null;
-                const disarm = () => {
-                  clearTimeout(armed);
-                  armed = null;
-                  btn.textContent = 'Remove this entry';
-                };
-                btn.onclick = async () => {
-                  if (!armed) {
-                    btn.textContent = 'Tap again to remove';
-                    // Long enough to read the new label and decide. Four
-                    // seconds expired while people were still reading it, which
-                    // turns a deliberate confirm into a button that seems to
-                    // reset itself at random.
-                    armed = setTimeout(disarm, 10000);
-                    return;
-                  }
-                  disarm();
-                  btn.disabled = true;
-                  try {
-                    await api('/api/admin/events/' + encodeURIComponent(btn.dataset.del), { method: 'DELETE' });
-                    toast('Entry removed');
-                    personTimesheet(ref, name);
-                  } catch (err) {
-                    btn.disabled = false;
-                    toast(err.message, true);
-                  }
-                };
-              });
-            } catch (e) {
-              cell.innerHTML = `<span class="err" style="font-size:.8rem">${esc(e.message)}</span>`;
-            }
-          };
-        });
-
-        $('view').querySelectorAll('button[data-appr]').forEach((b) => {
-          b.onclick = async () => {
-            try {
-              await api('/api/admin/approvals', {
-                method: 'POST',
-                body: { employeeRef: ref, day: b.dataset.d, status: b.dataset.appr },
-              });
-              toast(b.dataset.appr === 'approved' ? 'Approved' : 'Rejected');
-              const cur = mine.get(b.dataset.d) || { day: b.dataset.d };
-              cur.approvalStatus = b.dataset.appr;
-              mine.set(b.dataset.d, cur);
-              render();
-            } catch (e) { toast(e.message, true); }
-          };
-        });
-        window.scrollTo({ top: 0 });
+      const undo = async () => {
+        try {
+          await api(`/api/admin/days/${encodeURIComponent(ref)}/${day}/correction`, { method: 'DELETE' });
+          toast('Back to the phone’s times');
+          go('timesheets');
+        } catch (e) { toast(e.message, true); }
       };
-      render();
+      if ($('fxundo')) $('fxundo').onclick = async () => { close(); await undo(); };
+
+      $('fxsave').onclick = async () => {
+        const inV = $('fxin').value, outV = $('fxout').value;
+        if (!inV || !outV) return toast('Enter both times', true);
+        const firstIn = zonedIso(day, inV);
+        let lastOut = zonedIso(day, outV);
+        // An out time before the in time is the next morning — a late shift.
+        if (lastOut <= firstIn) lastOut = zonedIso(addDaysYmd(day, 1), outV);
+        $('fxsave').disabled = true;
+        try {
+          await api(`/api/admin/days/${encodeURIComponent(ref)}/${day}`, { method: 'PUT', body: { firstIn, lastOut } });
+          close();
+          toastUndo(`Saved · ${name} · ${dayLabel(day)}`, undo);
+          go('timesheets');
+        } catch (e) { $('fxsave').disabled = false; toast(e.message, true); }
+      };
+
+      if (d) {
+        api('/api/admin/events?' + new URLSearchParams({ employeeRef: ref, from: day, to: addDaysYmd(day, 1) }))
+          .then((evs) => {
+            const el = $('fxevents'); if (!el) return;
+            // Only this shift's punches: from its first arrival to its last departure.
+            const mine = evs.filter((e) => (!d.firstIn || e.at >= d.firstIn) && (!d.lastOut || e.at <= d.lastOut)).reverse();
+            el.innerHTML = mine.length ? mine.map(eventHtml).join('') : 'No punches.';
+          })
+          .catch(() => { const el = $('fxevents'); if (el) el.textContent = 'Could not load the punches.'; });
+      }
     }
+
 
     // ==================== PEOPLE ====================
     // Who is enrolled, as what, at what rate, and which job types they may pick.
     // The job-type catalog lives here too — it is only ever useful next to the
     // people you assign it to.
-    VIEWS.people = async () => {
+    async function renderPeople(host) {
       const resp = await apiFull('/api/admin/members');
       const rows = resp.data || [];
       const catalog = await api('/api/admin/work-types').catch(() => []);
@@ -1239,18 +1182,12 @@
             <div class="muted" style="font-size:.72rem;margin-top:8px">backend: ${esc(d.apiBase)} · secret set: ${d.hasSecret} · workspace: ${esc(d.tenantId || '—')} · status: ${d.status == null ? '—' : d.status}</div>
           </div>` : '';
 
-      $('view').innerHTML = banner + `<div class="card">
+      host.innerHTML = banner + `<div class="card">
         <h2>${ic('users')} People</h2>
-        <p class="lead">Everyone in your workspace. A role is what gives someone attendance at all — no role, no access. The pay rate drives the Timesheets totals.</p>
+        <p class="lead">Everyone in your workspace. Who has attendance, and who is an admin, is set in Eesa. The pay rate is what Timesheets use.</p>
         ${rows.length ? `
         <div class="toolbar">
           <input class="search" id="tq" type="search" placeholder="Search name or email" autocomplete="off">
-          <select id="trole">
-            <option value="">All roles</option>
-            <option value="manager">Manager</option>
-            <option value="staff">Staff</option>
-            <option value="none">No role (no access)</option>
-          </select>
           ${catalog.length ? `<select id="tjob">
             <option value="">All job types</option>
             ${catalog.map((w) => `<option value="${esc(w.id)}">${esc(w.name)}</option>`).join('')}
@@ -1260,8 +1197,8 @@
         </div>
         <div id="tbody"></div>` : empty('users', 'No teammates found in your workspace roster.')}
       </div>
-      <div class="card">
-        <h2>${ic('briefcase')} Job types</h2>
+      <details class="card fold">
+        <summary>${ic('briefcase')} Job types</summary>
         <p class="lead">What people can say they're here to do when they check in. Assign them per person above.</p>
         <div id="wtlist">${catalog.length
           ? `<div class="chips">${catalog.map((w) => `<span class="chip">${esc(w.name)}<button class="btn link" data-w="${esc(w.id)}" title="Remove" style="padding:0 2px;margin-left:2px">✕</button></span>`).join('')}</div>`
@@ -1270,16 +1207,16 @@
           <input id="wtname" placeholder="e.g. Kitchen, Delivery, Front desk" style="flex:1;min-width:180px">
           <button class="btn primary" id="wtadd">Add</button>
         </div>
-      </div>`;
+      </details>`;
 
       $('wtadd').onclick = async () => {
         const name = $('wtname').value.trim();
         if (!name) return toast('Enter a name', true);
-        try { await api('/api/admin/work-types', { method: 'POST', body: { name } }); toast('Added'); go('people'); }
+        try { await api('/api/admin/work-types', { method: 'POST', body: { name } }); toast('Added'); go('setup'); }
         catch (e) { toast(e.message, true); }
       };
       $('wtlist').querySelectorAll('button[data-w]').forEach((b) => b.onclick = async () => {
-        try { await api('/api/admin/work-types/' + encodeURIComponent(b.dataset.w), { method: 'DELETE' }); toast('Removed'); go('people'); }
+        try { await api('/api/admin/work-types/' + encodeURIComponent(b.dataset.w), { method: 'DELETE' }); toast('Removed'); go('setup'); }
         catch (e) { toast(e.message, true); }
       });
 
@@ -1289,45 +1226,35 @@
       // only changes what is drawn — never which control belongs to whom.
       const rowHtml = (u, i) => {
         const ids = u.workTypeIds || [];
-        const jobs = catalog.length
-          ? catalog.map((w) => `<label class="wtchk"><input type="checkbox" data-wt="${i}" value="${esc(w.id)}" ${ids.includes(w.id) ? 'checked' : ''}> ${esc(w.name)}</label>`).join('')
-          : '<span class="muted" style="font-size:.72rem">Add job types below to assign them.</span>';
+        const jobs = catalog.map((w) => `<label class="wtchk"><input type="checkbox" data-wt="${i}" value="${esc(w.id)}" ${ids.includes(w.id) ? 'checked' : ''}> ${esc(w.name)}</label>`).join('');
         return `<tr>
           <td><div style="font-weight:600">${esc(u.name || u.email || u.employeeRef)}</div><div class="muted" style="font-size:.74rem">${esc(u.email || '')}</div></td>
-          <td><select id="r${i}">
-            <option value="" ${!u.role ? 'selected' : ''}>None</option>
-            <option value="staff" ${u.role === 'staff' ? 'selected' : ''}>Staff</option>
-            <option value="manager" ${u.role === 'manager' ? 'selected' : ''}>Manager</option>
-          </select></td>
-          <td><input id="p${i}" style="width:84px" type="number" min="0" step="0.5" value="${u.payRate == null ? '' : u.payRate}" placeholder="—"></td>
-          <td><button class="btn small primary" id="s${i}">Save</button></td>
+          <td>${u.attendanceRole === 'admin' ? '<span class="pill approved">Admin</span>' : u.attendanceRole === 'staff' ? '<span class="pill complete">Staff</span>' : '<span class="muted" style="font-size:.78rem">No attendance</span>'}</td>
+          ${u.attendanceRole ? `<td><input id="p${i}" style="width:84px" type="number" min="0" step="0.5" value="${u.payRate == null ? '' : u.payRate}" placeholder="—"></td>
+          <td><button class="btn small primary" id="s${i}">Save</button></td>` : '<td></td><td></td>'}
         </tr>
-        <tr class="wtrow"><td colspan="4"><div class="muted" style="font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">Job types</div><div class="wtwrap">${jobs}</div></td></tr>`;
+        ${u.attendanceRole && catalog.length ? `<tr class="wtrow"><td colspan="4"><div class="muted" style="font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">Job types</div><div class="wtwrap">${jobs}</div></td></tr>` : ''}`;
       };
 
       const bind = (u, i) => {
+        if (!$('s' + i)) return;
         $('s' + i).onclick = async () => {
-          const role = $('r' + i).value;
+          const role = u.role || (u.attendanceRole === 'admin' ? 'manager' : 'staff');
           const payRate = $('p' + i).value === '' ? null : Number($('p' + i).value);
           const workTypeIds = [...document.querySelectorAll('input[data-wt="' + i + '"]:checked')].map((c) => c.value);
           try {
-            if (!role) { await api('/api/admin/members/' + encodeURIComponent(u.employeeRef), { method: 'DELETE' }); toast('Removed'); u.role = null; }
-            else {
-              await api('/api/admin/members', { method: 'POST', body: { employeeRef: u.employeeRef, role, payRate, name: u.name, email: u.email, workTypeIds } });
-              toast('Saved');
-              u.role = role; u.payRate = payRate; u.workTypeIds = workTypeIds;
-            }
+            await api('/api/admin/members', { method: 'POST', body: { employeeRef: u.employeeRef, role, payRate, name: u.name, email: u.email, workTypeIds } });
+            toast('Saved');
+            u.role = role; u.payRate = payRate; u.workTypeIds = workTypeIds;
           } catch (e) { toast(e.message, true); }
         };
       };
 
       const render = () => {
         const qy = ($('tq').value || '').trim().toLowerCase();
-        const role = $('trole').value;
         const job = $('tjob') ? $('tjob').value : '';
         const matches = rows.map((u, i) => [u, i]).filter(([u]) => {
           if (qy && !`${u.name || ''} ${u.email || ''} ${u.employeeRef}`.toLowerCase().includes(qy)) return false;
-          if (role === 'none' ? !!u.role : role && u.role !== role) return false;
           if (job) {
             const ids = u.workTypeIds || [];
             if (job === '__none' ? ids.length > 0 : !ids.includes(job)) return false;
@@ -1338,15 +1265,14 @@
           ? `${rows.length} ${rows.length === 1 ? 'person' : 'people'}`
           : `${matches.length} of ${rows.length}`;
         $('tbody').innerHTML = matches.length
-          ? `<table><thead><tr><th>Name</th><th>Role</th><th>Pay/hr</th><th></th></tr></thead><tbody>${matches.map(([u, i]) => rowHtml(u, i)).join('')}</tbody></table>`
+          ? `<table><thead><tr><th>Name</th><th>Attendance</th><th>Pay/hr</th><th></th></tr></thead><tbody>${matches.map(([u, i]) => rowHtml(u, i)).join('')}</tbody></table>`
           : empty('users', 'Nobody matches those filters.');
         matches.forEach(([u, i]) => bind(u, i));
       };
       $('tq').oninput = render;
-      $('trole').onchange = render;
       if ($('tjob')) $('tjob').onchange = render;
       render();
-    };
+    }
 
     // ==================== SETUP ====================
     // Configure-once things: where work happens, what a shift looks like, who is
@@ -1362,6 +1288,8 @@
       const brk = (t) => (t.breakStart && t.breakEnd) ? ` · break ${t.breakStart}–${t.breakEnd}` : '';
 
       $('view').innerHTML = `
+        <div id="peoplepane"><div class="empty">Loading people…</div></div>
+
         <div class="card">
           <h2>${ic('pin')} Work zones</h2>
           <p class="lead">Where attendance counts. Phones check in and out automatically at the edge of these.</p>
@@ -1383,8 +1311,8 @@
           <div id="zloc-msg" class="muted" style="font-size:.76rem;margin-top:8px"></div>
         </div>
 
-        <div class="card">
-          <h2>${ic('calendar')} Shift templates</h2>
+        <details class="card fold">
+          <summary>${ic('calendar')} Shift templates</summary>
           <p class="lead">Reusable shifts you can assign below. The break is optional and is taken off the expected hours.</p>
           <div id="tpllist">${templates.length
             ? `<table><thead><tr><th>Name</th><th>Shift</th><th>Hours</th><th></th></tr></thead><tbody>${templates.map((t) => `<tr>
@@ -1401,10 +1329,10 @@
             <label class="field">Break end<input type="time" id="tpbe"></label>
             <button class="btn primary" id="tpadd">Add</button>
           </div>
-        </div>
+        </details>
 
-        <div class="card">
-          <h2>${ic('calendar')} Expected hours</h2>
+        <details class="card fold">
+          <summary>${ic('calendar')} Expected hours</summary>
           <p class="lead">Optional. Set what a person is expected to work on a day and Timesheets will compare it against what they actually did.</p>
           <div class="row">
             <label class="field">Person<select id="sref">${members.map((m) => `<option value="${esc(m.employeeRef)}">${esc(m.name || m.employeeRef)}</option>`).join('') || '<option value="">No enrolled staff</option>'}</select></label>
@@ -1414,34 +1342,14 @@
             <button class="btn primary" id="ssave" style="align-self:flex-end">Assign</button>
           </div>
           <div id="slist" class="muted" style="margin-top:12px">Loading…</div>
-        </div>
+        </details>
 
-        <div class="card">
-          <h2>${ic('sliders')} Workspace</h2>
+        <details class="card fold">
+          <summary>${ic('sliders')} Workspace</summary>
           <label class="field" style="text-transform:none;letter-spacing:0;font-size:.8rem">Time zone — decides where one day ends and the next begins
             <input id="tz" value="${esc(settings.timezone || 'UTC')}" placeholder="e.g. America/Los_Angeles" style="max-width:280px;margin-top:4px"></label>
           <div style="margin-top:14px"><button class="btn primary" id="tzsave">Save</button></div>
-        </div>
-
-        <div class="card">
-          <h2>${ic('bell')} What managers are told</h2>
-          <p class="lead">Staff are always told about their own check-in and check-out — that one isn't optional, because the geofence can clock someone in without them touching their phone. This is about what reaches <em>you</em>.</p>
-          <label class="wtchk" style="margin-bottom:12px"><input type="checkbox" id="rc">
-            Ask a manager to confirm each check-in</label>
-          <p class="muted" style="font-size:.76rem;margin:-6px 0 14px">
-            When someone arrives you are asked “is this person here?”. Their clock
-            starts either way — confirming only records who vouched for it. If a
-            shift ends with nobody having answered, you and they are both told.
-          </p>
-          <label class="field" style="text-transform:none;letter-spacing:0;font-size:.8rem">Notify managers
-            <select id="mn" style="max-width:320px;margin-top:4px">
-              <option value="exceptions">Only what needs me — unconfirmed punches</option>
-              <option value="all">Every check-in and check-out</option>
-              <option value="off">Nothing</option>
-            </select></label>
-          <p class="muted" style="font-size:.76rem;margin:10px 0 0" id="mnhint"></p>
-          <div style="margin-top:14px"><button class="btn primary" id="mnsave">Save</button></div>
-        </div>`;
+        </details>`;
 
       // --- zones ---
       $('zlist').querySelectorAll('button[data-z]').forEach((b) => b.onclick = async () => {
@@ -1514,35 +1422,8 @@
         catch (e) { toast(e.message, true); }
       };
 
-      // --- manager notifications ---
-      // Say out loud what each choice will cost in notifications per day, using
-      // this workspace's own headcount. "Every check-in and check-out" sounds
-      // reasonable in the abstract and is the setting most likely to get all
-      // attendance notifications muted — the number is what makes that concrete
-      // BEFORE it is chosen rather than a week later.
-      const mnSel = $('mn');
-      mnSel.value = settings.managerNotify || 'exceptions';
-      $('rc').checked = settings.requireConfirmation !== false;
-      const staffCount = (members || []).filter((m) => m.role).length;
-      const mnHint = () => {
-        const n = staffCount * 2;
-        $('mnhint').textContent = mnSel.value === 'all'
-          ? `About ${n || 'dozens of'} notifications a day, every working day — one per punch from ${staffCount || 'every'} enrolled ${staffCount === 1 ? 'person' : 'people'}.`
-          : mnSel.value === 'off'
-            ? 'You will hear nothing — including when a punch cannot be confirmed. Timesheets still record everything.'
-            : 'Only punches where the location could not be confirmed. Usually a handful a week.';
-      };
-      mnHint();
-      mnSel.onchange = mnHint;
-      $('mnsave').onclick = async () => {
-        try {
-          await api('/api/admin/settings', { method: 'PUT', body: {
-            managerNotify: mnSel.value,
-            requireConfirmation: $('rc').checked,
-          } });
-          toast('Saved');
-        } catch (e) { toast(e.message, true); }
-      };
+      // --- people ---
+      await renderPeople($('peoplepane'));
     };
 
     // ---- The zone map, shared by Today (read-only) and Setup (editable) -----
