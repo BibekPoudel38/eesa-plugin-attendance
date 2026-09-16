@@ -165,6 +165,27 @@ describe('computeToday — hours from a day of punches', () => {
     assert.equal(t.totalMinutes, 240);
   });
 
+  test('a visit under ten minutes is on the record but adds no hours', () => {
+    const t = computeToday([ev('check_in', '12:33'), ev('check_out', '12:37')]);
+    assert.equal(t.totalMinutes, 0);
+    assert.equal(t.shortVisits, 1);
+    assert.notEqual(t.firstIn, null, 'the punches still happened');
+  });
+
+  test('exactly ten minutes counts', () => {
+    const t = computeToday([ev('check_in', '12:00'), ev('check_out', '12:10')]);
+    assert.equal(t.totalMinutes, 10);
+    assert.equal(t.shortVisits, 0);
+  });
+
+  test('a short visit does not disturb the real shift beside it', () => {
+    const t = computeToday([
+      ev('check_in', '09:00'), ev('check_out', '09:04'),
+      ev('check_in', '10:00'), ev('check_out', '14:00'),
+    ]);
+    assert.equal(t.totalMinutes, 240);
+  });
+
   test('no events is a zero day, not a crash', () => {
     const t = computeToday([]);
     assert.equal(t.totalMinutes, 0);

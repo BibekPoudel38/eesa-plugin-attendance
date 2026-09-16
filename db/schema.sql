@@ -190,3 +190,43 @@ alter table events add column if not exists accuracy_m double precision;
 create index if not exists events_located_idx
     on events (tenant_id, employee_ref, at desc)
  where lat is not null and lng is not null;
+
+-- ---- Simplified attendance (created on first use by ensureSimplifyTables) ----
+-- A phone-reported crossing that changed nothing on the record, kept as the
+-- evidence of when somebody really left after checking out by hand.
+create table if not exists presence_signals (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id text not null,
+  employee_ref text not null,
+  type text not null check (type in ('check_in', 'check_out')),
+  zone_id uuid,
+  lat double precision,
+  lng double precision,
+  accuracy_m double precision,
+  source text not null,
+  reason text not null,
+  at timestamptz not null default now()
+);
+create index if not exists presence_signals_person_at on presence_signals (tenant_id, employee_ref, at);
+
+-- A manager's in and out for a day. Wins over the punches; the punches stay.
+create table if not exists day_corrections (
+  tenant_id text not null,
+  employee_ref text not null,
+  day date not null,
+  first_in timestamptz not null,
+  last_out timestamptz not null,
+  note text not null default '',
+  corrected_by text not null,
+  corrected_at timestamptz not null default now(),
+  primary key (tenant_id, employee_ref, day)
+);
+
+-- One row per scheduled summary sent, so a restart never sends it twice.
+create table if not exists sent_summaries (
+  tenant_id text not null,
+  kind text not null,
+  period_key text not null,
+  sent_at timestamptz not null default now(),
+  primary key (tenant_id, kind, period_key)
+);

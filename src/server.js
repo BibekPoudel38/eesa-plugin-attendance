@@ -16,6 +16,8 @@ import { nameMapOf, withNames } from './names.js';
 import { telemetry, flush as flushTelemetry } from './telemetry.js';
 import { notifyUser, notifyUsers } from './notify.js';
 import { recordEvent } from './telemetry.js';
+import { startSummaries } from './summaries.js';
+import { spanOf, weekApprovedMessage } from './summary_plan.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANIFEST = JSON.parse(readFileSync(join(__dirname, '..', 'manifest.json'), 'utf-8'));
@@ -317,35 +319,6 @@ async function personName(tenantId, employeeRef) {
   return byRef.get(String(employeeRef)) || 'A team member';
 }
 
-/// Punches a DEVICE observed, as opposed to ones a person asserted.
-///
-/// A geofence crossing and an NFC tag are things that happened to the phone: it
-/// was at a boundary, or it was held against a tag someone mounted on a wall.
-/// A button in the app is a claim — the location is still verified against the
-/// zone, but the decision to record a shift was the person's own.
-const OBSERVED_SOURCES = new Set(['geofence', 'nfc']);
-
-/// Whether this shift needs someone ELSE to vouch for it.
-///
-/// Three rules, in order:
-///
-///   * Nobody else to ask → no. A question with no possible answer only ever
-///     becomes an alert nobody could have prevented.
-///   * The person tapped it themselves → yes, always, admin or not. This is the
-///     one case where location cannot help: it proves the phone was at the
-///     zone, never that the person holding it was the one on the rota, and
-///     exempting the authority here would exempt exactly the person whose own
-///     claim nobody is checking.
-///   * The fence recorded it → an admin is the authority the question would be
-///     put to, so theirs stands on its own. Everyone else's is confirmed.
-async function shouldConfirm(tenantId, employeeRef, source) {
-  const managers = await managerAudience(tenantId);
-  const others = managers.filter((r) => String(r) !== String(employeeRef));
-  if (others.length === 0) return false;
-  if (!OBSERVED_SOURCES.has(String(source || 'geofence'))) return true;
-  return !managers.some((r) => String(r) === String(employeeRef));
-}
-
 // ---- Punch notifications ---------------------------------------------------
 
 /// Clock time in the tenant's own timezone, as a person writes it.
@@ -364,13 +337,6 @@ function clockAt(when, timezone) {
   } catch {
     return '';
   }
-}
-
-/// "8h 09m", the way hours are said out loud rather than "489 minutes".
-function spanOf(minutes) {
-  const m = Math.max(0, Math.round(Number(minutes) || 0));
-  const h = Math.floor(m / 60);
-  return h ? `${h}h ${String(m % 60).padStart(2, '0')}m` : `${m}m`;
 }
 
 /// Tell the employee — and, depending on the tenant's policy, the managers —
@@ -435,45 +401,17 @@ function notePunch(req, type, ev, status) {
 
 async function announcePunch(tenantId, employeeRef, type, status, extra = {}) {
   try {
-    const { timezone, managerNotify } = await db.getTenantSettings(tenantId);
-    const isIn = type === 'check_in';
-    const punchedAtIso = isIn ? (status.since || new Date()) : new Date();
+    const { timezone } = await db.getTenantSettings(tenantId);
     const today = status.today || {};
-    const firstInIso = extra.checkInAt || today.firstIn || null;
-    const shiftMinutes = firstInIso
-      ? Math.max(0, Math.round((Date.now() - new Date(firstInIso).getTime()) / 60000))
-      : null;
     const plan = planFor({
       type,
       source: extra.source,
-      who: await personName(tenantId, employeeRef),
-      at: clockAt(punchedAtIso, timezone),
+      at: clockAt(type === 'check_in' ? (status.since || new Date()) : new Date(), timezone),
       zone: status.zoneName || '',
       worked: spanOf(today.totalMinutes),
       minutes: today.totalMinutes || 0,
-      // The review is of the DAY, so "in at" is the day's first arrival; the
-      // shift nobody vouched for is named separately, in the reason.
-      firstIn: today.firstIn ? clockAt(today.firstIn, timezone) : (firstInIso ? clockAt(firstInIso, timezone) : ''),
-      arrivedAt: extra.checkInAt ? clockAt(extra.checkInAt, timezone) : '',
-      shiftMinutes: isIn ? null : shiftMinutes,
-      pending: Boolean(extra.pending),
-      unconfirmed: Boolean(extra.unconfirmed),
-      unverified: Boolean(status.verification && status.verification !== 'verified'),
-      verification: status.verification || '',
-      managerNotify,
-      employeeRef,
-      eventId: extra.eventId || '',
-      day: today.date || '',
     });
-    let managers = null;
-    for (const item of plan) {
-      if (item.to === 'employee') {
-        notifyUser(tenantId, employeeRef, { ...item, type: item.kind });
-        continue;
-      }
-      managers ??= (await managerAudience(tenantId)).filter((r) => String(r) !== String(employeeRef));
-      if (managers.length) notifyUsers(tenantId, managers, { ...item, type: item.kind });
-    }
+    for (const item of plan) notifyUser(tenantId, employeeRef, { ...item, type: item.kind });
   } catch (e) {
     console.error('[attendance] punch notification failed:', e && e.message);
   }
@@ -493,20 +431,10 @@ function punchOutcome(ev) {
 // ---- Employee REST hot path (Flutter) — any enrolled user -----------------
 app.post('/api/checkIn', emp, async (req, res) => {
   const { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true, source = 'geofence', workType = null, clientAt = null } = req.body || {};
-  // Whether a human has to vouch for this shift. Read BEFORE the insert, because
-  // it decides how the punch is stored — not just who gets told about it.
-  const { requireConfirmation } = await db.getTenantSettings(req.ctx.tenantId).catch(() => ({}));
-  // Three things have to be true before a shift is held for someone's word:
-  // the workspace asks for it, this is a real shift (a visit marked "not for
-  // work" claims no hours, so there is nothing to vouch for), and there is
-  // actually somebody whose answer would mean anything — which excludes a
-  // manager's own arrival and a roster with no other manager on it.
-  const needsConfirm = Boolean(requireConfirmation)
-    && forWork !== false
-    && await shouldConfirm(req.ctx.tenantId, req.ctx.sub, source).catch(() => false);
+  // No arrival is held for a manager's word any more. "Is X here?" was answered
+  // once in eight, and the phone crossing the zone is already the evidence.
   const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', {
     zoneId, lat, lng, accuracyM, forWork, source, workType,
-    requireConfirm: needsConfirm,
     at: db.punchedAt(clientAt),
   });
   const status = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
@@ -517,18 +445,12 @@ app.post('/api/checkIn', emp, async (req, res) => {
   if (ev.ignored) noteRefusedPunch(req.ctx.tenantId, req.ctx.sub, 'check_in', ev);
   else notePunch(req, 'check_in', ev, status);
   if (!ev.duplicate) {
-    announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_in', status, {
-      source, pending: ev.pending, eventId: ev.id,
-    });
+    announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_in', status, { source });
   }
   res.json({ ok: true, data: { ...status, punch: punchOutcome(ev) } });
 });
 app.post('/api/checkOut', emp, async (req, res) => {
   const { zoneId = null, lat = null, lng = null, accuracyM = null, source = 'geofence', clientAt = null } = req.body || {};
-  // Look for the outstanding question BEFORE recording the departure: the punch
-  // that closes the shift is also the moment the chance to confirm it in person
-  // has gone.
-  const outstanding = await db.unconfirmedOpenCheckIn(req.ctx.tenantId, req.ctx.sub).catch(() => null);
   const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', {
     zoneId, lat, lng, accuracyM, source, at: db.punchedAt(clientAt),
   });
@@ -536,14 +458,7 @@ app.post('/api/checkOut', emp, async (req, res) => {
   if (ev.ignored) noteRefusedPunch(req.ctx.tenantId, req.ctx.sub, 'check_out', ev);
   else notePunch(req, 'check_out', ev, status);
   if (!ev.duplicate) {
-    // Settle the open question BEFORE anyone is told. The alert says the shift
-    // went unconfirmed, and it must be true of the record by the time it lands.
-    if (outstanding) await db.markUnconfirmed(req.ctx.tenantId, outstanding.id).catch(() => null);
-    announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_out', status, {
-      source,
-      unconfirmed: Boolean(outstanding),
-      checkInAt: outstanding ? outstanding.at : null,
-    });
+    announcePunch(req.ctx.tenantId, req.ctx.sub, 'check_out', status, { source });
   }
   res.json({ ok: true, data: { ...status, punch: punchOutcome(ev) } });
 });
@@ -650,9 +565,10 @@ app.put('/api/admin/settings', manager, async (req, res) => {
   const body = req.body || {};
   // Only touch what was sent. Saving the timezone from the Setup screen must not
   // silently reset a notification policy the screen didn't show.
+  // The timezone is the only setting left: who is told what is no longer a
+  // choice anyone has to make.
   res.json({ ok: true, data: await db.setTenantSettings(req.ctx.tenantId, {
     ...(body.timezone !== undefined ? { timezone: body.timezone } : {}),
-    ...(body.managerNotify !== undefined ? { managerNotify: body.managerNotify } : {}),
   }) });
 });
 
@@ -754,15 +670,55 @@ app.post('/api/admin/approvals', manager, async (req, res) => {
   if (!result.updated) {
     return res.status(404).json({ ok: false, error: { code: 'NO_TIMESHEET', message: 'No attendance recorded for that day.' } });
   }
-  // Notify the staff member of the decision (best-effort, non-blocking).
-  const verb = status === 'rejected' ? 'rejected' : status === 'pending' ? 'reset to pending' : 'approved';
-  notifyUser(req.ctx.tenantId, employeeRef, {
-    title: `Timesheet ${verb}`,
-    body: `Your attendance for ${day} was ${verb}.`,
-    type: 'attendance_approved',
-    data: { day: String(day), status: String(status) },
-  });
+  // No push per day. Staff hear once, when their week is approved.
   res.json({ ok: true, data: result });
+});
+
+// Approve a person's week in one tap. Refused while a day still needs a fix.
+app.post('/api/admin/approvals/week', manager, async (req, res) => {
+  const { employeeRef, from, to } = req.body || {};
+  if (!employeeRef || !from || !to) {
+    return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: 'employeeRef, from and to are required.' } });
+  }
+  const result = await db.approveWeek(req.ctx.tenantId, employeeRef, from, to, req.ctx.sub);
+  if (!result.ok) {
+    return res.status(409).json({ ok: false, error: {
+      code: 'NEEDS_FIX',
+      message: `Fix ${result.needsFix.length === 1 ? 'the day' : `${result.needsFix.length} days`} first.`,
+      days: result.needsFix,
+    } });
+  }
+  if (result.approvedDays > 0) {
+    const msg = weekApprovedMessage(from, to, result.totalMinutes);
+    // A staff-kind type with no employeeRef opens their own hours in the app.
+    notifyUser(req.ctx.tenantId, employeeRef, {
+      ...msg, type: 'attendance_check_out', data: { summary: 'week', from, to },
+    });
+  }
+  res.json({ ok: true, data: result });
+});
+
+// Fix times: a manager sets a day's real in and out.
+app.put('/api/admin/days/:employeeRef/:day', manager, async (req, res) => {
+  const { firstIn, lastOut, note = '' } = req.body || {};
+  const { employeeRef, day } = req.params;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    return res.status(400).json({ ok: false, error: { code: 'BAD_DAY', message: 'The day must be YYYY-MM-DD.' } });
+  }
+  const result = await db.setDayCorrection(req.ctx.tenantId, employeeRef, day, { firstIn, lastOut, note }, req.ctx.sub);
+  if (!result.ok) {
+    return res.status(400).json({ ok: false, error: { code: 'BAD_TIMES', message: result.problem } });
+  }
+  const rows = await db.listApprovals(req.ctx.tenantId, { from: day, to: day });
+  res.json({ ok: true, data: rows.find((r) => String(r.employeeRef) === String(employeeRef)) || null });
+});
+
+// Undo a fix: the day goes back to what its punches say.
+app.delete('/api/admin/days/:employeeRef/:day/correction', manager, async (req, res) => {
+  const { employeeRef, day } = req.params;
+  const result = await db.clearDayCorrection(req.ctx.tenantId, employeeRef, day);
+  const rows = await db.listApprovals(req.ctx.tenantId, { from: day, to: day });
+  res.json({ ok: true, data: { ...result, day: rows.find((r) => String(r.employeeRef) === String(employeeRef)) || null } });
 });
 
 // Manual entry: log an event on a staff member's behalf (fallback / correction).
@@ -977,6 +933,9 @@ app.get('/api/ui/context', authMiddleware({ surface: 'ui' }), async (req, res) =
       appRole: uiRoleOf(req.ctx, member) === 'staff' ? 'staff' : appRoleOf(req.ctx),
       role: uiRoleOf(req.ctx, member), // 'manager' | 'staff' | null
       isPlatformAdmin: admin,
+      // Every time on this page is the restaurant's, whoever is looking and
+      // wherever they are. From India, a 7:20 AM check-out read "07:50 PM".
+      timezone: await db.getTenantTimezone(req.ctx.tenantId).catch(() => 'UTC'),
     },
   });
 });
@@ -1018,6 +977,9 @@ app.listen(port, () => {
   // Say plainly, at boot, whether the database is actually reachable. Without
   // this the first sign of a bad DATABASE_URL is a stack trace on whichever
   // request happens to arrive first.
+  db.ensureSimplifyTables()
+    .then(() => startSummaries({ managerAudience }))
+    .catch((e) => console.error('[attendance] could not prepare attendance tables:', e && e.message));
   db.ping()
     .then(() => console.log(`[attendance] database OK (${db.dbHost()})`))
     .catch((e) =>

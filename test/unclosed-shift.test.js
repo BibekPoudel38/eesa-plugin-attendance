@@ -21,12 +21,20 @@ describe('an unfinished shift', () => {
     assert.equal(t.openTooLong, false);
   });
 
-  test('is capped once it passes any real shift length', () => {
+  test('past any real shift length it bills nothing, and says why', () => {
     // Gopal checked in at 16:46 and never checked out. Without a ceiling this
-    // is "every minute since 13 August".
+    // was "every minute since 13 August"; with one it was twelve hours nobody
+    // measured. Now it is zero, flagged, for a manager to fix with the real time.
     const t = computeToday([at(DAY + '00:46:00Z')], { now: Date.parse('2026-09-08T00:00:00Z') });
-    assert.equal(t.totalMinutes, 12 * 60, 'capped at twelve hours');
-    assert.equal(t.openTooLong, true, 'and says the number is a ceiling, not a measurement');
+    assert.equal(t.totalMinutes, 0, 'a forgotten check-out is not paid as a shift');
+    assert.equal(t.openTooLong, true, 'and the day says the check-out never came');
+    assert.equal(t.unclosed, true);
+  });
+
+  test('inside the ceiling an open shift still counts live', () => {
+    const t = computeToday([at(DAY + '08:00:00Z')], { now: Date.parse(DAY + '19:59:00Z') });
+    assert.equal(t.totalMinutes, 11 * 60 + 59);
+    assert.equal(t.openTooLong, false);
   });
 
   test('a past day is not billed every hour since', () => {

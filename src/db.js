@@ -143,7 +143,20 @@ export function implausibleMove(last, { lat, lng, accuracyM }) {
 // stays "verified" rather than accusing someone on the strength of bad GPS.
 const VERIFY_SLACK_MAX_M = 250;
 
-function verifyOut(loc) {
+/// Departures the phone reported on its own.
+///
+/// iOS fires "left the zone" some way past the edge, so the fix attached to a
+/// real walk-out is by nature outside the circle: Jeeva's were recorded 206 m
+/// and 418 m from zones of 40 m and 58 m. Measured by distance, every normal
+/// day read "Location not confirmed" and managers learned to ignore the flag.
+/// The crossing IS the evidence — the fix only says where the phone was a
+/// moment later.
+const OBSERVED_EXIT_SOURCES = new Set(['geofence', 'replay']);
+
+export function verifyOut(loc, { type = null, source = null } = {}) {
+  if (type === 'check_out' && OBSERVED_EXIT_SOURCES.has(String(source || ''))) {
+    return { state: 'verified', reason: 'The phone reported leaving the work zone.' };
+  }
   if (!loc) return { state: 'unverified', reason: 'No location was recorded with this punch.' };
   if (loc.distanceM == null) {
     return { state: 'unverified', reason: 'Recorded without a work zone to check against.' };
@@ -322,7 +335,7 @@ const coord = (v, max) => {
 /// the next morning.
 async function lastEvent(tenantId, employeeRef) {
   const rows = await q(
-    `select type, zone_id, for_work, at, lat, lng, accuracy_m from events
+    `select id, type, source, zone_id, for_work, at, lat, lng, accuracy_m from events
       where tenant_id = $1 and employee_ref = $2
       order by at desc limit 1`,
     [tenantId, employeeRef],
@@ -383,6 +396,150 @@ export function punchedAt(clientAt, now = Date.now()) {
 }
 
 
+/// Punches a phone made on its own — what a fence or a replayed queue reports.
+const PHONE_OBSERVED = new Set(['geofence', 'replay']);
+
+/// Tables the simplified attendance model needs, created if missing.
+///
+/// Same approach as ensureSettingsColumn: the schema lives in the database,
+/// not in a migration runner, so `if not exists` on first use keeps a deploy
+/// from depending on DDL someone forgot to run.
+///
+///   presence_signals — a phone-reported crossing that changed nothing on the
+///                      record, kept as evidence of when someone really left.
+///   day_corrections  — a manager's in and out for a day. Wins over punches.
+///   sent_summaries   — one row per summary sent, so a restart never repeats one.
+let _simplifyReady = null;
+export async function ensureSimplifyTables() {
+  if (_simplifyReady) return _simplifyReady;
+  _simplifyReady = (async () => {
+    await pool.query(`create table if not exists presence_signals (
+      id uuid primary key default gen_random_uuid(),
+      tenant_id text not null,
+      employee_ref text not null,
+      type text not null check (type in ('check_in', 'check_out')),
+      zone_id uuid,
+      lat double precision,
+      lng double precision,
+      accuracy_m double precision,
+      source text not null,
+      reason text not null,
+      at timestamptz not null default now()
+    )`);
+    await pool.query(`create index if not exists presence_signals_person_at
+      on presence_signals (tenant_id, employee_ref, at)`);
+    await pool.query(`create table if not exists day_corrections (
+      tenant_id text not null,
+      employee_ref text not null,
+      day date not null,
+      first_in timestamptz not null,
+      last_out timestamptz not null,
+      note text not null default '',
+      corrected_by text not null,
+      corrected_at timestamptz not null default now(),
+      primary key (tenant_id, employee_ref, day)
+    )`);
+    await pool.query(`create table if not exists sent_summaries (
+      tenant_id text not null,
+      kind text not null,
+      period_key text not null,
+      sent_at timestamptz not null default now(),
+      primary key (tenant_id, kind, period_key)
+    )`);
+    return true;
+  })().catch((e) => {
+    _simplifyReady = null; // try again next time rather than caching a failure
+    throw e;
+  });
+  return _simplifyReady;
+}
+
+function notePresenceSignal(tenantId, employeeRef, { type, zoneId, lat, lng, accuracyM, source, reason, at }) {
+  ensureSimplifyTables()
+    .then(() => q(
+      `insert into presence_signals (tenant_id, employee_ref, type, zone_id, lat, lng, accuracy_m, source, reason, at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, coalesce($10::timestamptz, now()))`,
+      [tenantId, employeeRef, type, zoneId, lat, lng, accuracyM, String(source), reason, at],
+    ))
+    .catch((e) => console.error('[attendance] could not keep presence signal:', e && e.message));
+}
+
+async function dayCorrection(tenantId, employeeRef, day) {
+  await ensureSimplifyTables();
+  const rows = await q(
+    `select first_in, last_out, note, corrected_by, corrected_at from day_corrections
+      where tenant_id = $1 and employee_ref = $2 and day = $3::date`,
+    [tenantId, employeeRef, day],
+  );
+  return rows[0] || null;
+}
+
+/// Longest day a manager can enter. Longer than any shift here; short enough
+/// that a mistyped date (8 PM tomorrow instead of today) is refused, not paid.
+const MAX_CORRECTED_MS = 16 * 60 * 60 * 1000;
+
+/// Check a manager's in and out for a day before it is saved. Returns a reason
+/// in plain words, or null when it is fine.
+export function correctionProblem({ day, firstIn, lastOut, tz }) {
+  const a = Date.parse(firstIn);
+  const b = Date.parse(lastOut);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 'Both times are needed.';
+  if (b <= a) return 'The check-out has to be after the check-in.';
+  if (b - a > MAX_CORRECTED_MS) return 'A day can be at most 16 hours.';
+  if (localDay(firstIn, tz) !== day) return 'The check-in has to be on the day you are fixing.';
+  if (a > Date.now() + 60 * 1000) return 'That time has not happened yet.';
+  return null;
+}
+
+/// A manager sets a day's real in and out. The punches stay as they were;
+/// the correction is what the day now adds up to, and who decided it.
+export async function setDayCorrection(tenantId, employeeRef, day, { firstIn, lastOut, note = '' }, by) {
+  await ensureSimplifyTables();
+  const tz = await tenantTz(tenantId);
+  const problem = correctionProblem({ day, firstIn, lastOut, tz });
+  if (problem) return { ok: false, problem };
+  await q(
+    `insert into day_corrections (tenant_id, employee_ref, day, first_in, last_out, note, corrected_by, corrected_at)
+     values ($1, $2, $3::date, $4, $5, $6, $7, now())
+     on conflict (tenant_id, employee_ref, day) do update
+       set first_in = excluded.first_in, last_out = excluded.last_out, note = excluded.note,
+           corrected_by = excluded.corrected_by, corrected_at = now()`,
+    [tenantId, employeeRef, day, new Date(firstIn).toISOString(), new Date(lastOut).toISOString(),
+     String(note || '').slice(0, 300), String(by)],
+  );
+  await upsertDaySummary(tenantId, employeeRef, day);
+  return { ok: true };
+}
+
+/// Undo: the day goes back to what its punches say.
+export async function clearDayCorrection(tenantId, employeeRef, day) {
+  await ensureSimplifyTables();
+  const rows = await q(
+    `delete from day_corrections where tenant_id = $1 and employee_ref = $2 and day = $3::date returning day`,
+    [tenantId, employeeRef, day],
+  );
+  await upsertDaySummary(tenantId, employeeRef, day);
+  return { removed: rows.length > 0 };
+}
+
+/// Claim a summary before sending it. Only the caller that inserts the row
+/// sends, so a restart or a second instance never sends the same one twice.
+export async function claimSummary(tenantId, kind, periodKey) {
+  await ensureSimplifyTables();
+  const rows = await q(
+    `insert into sent_summaries (tenant_id, kind, period_key) values ($1, $2, $3)
+     on conflict do nothing returning period_key`,
+    [tenantId, kind, periodKey],
+  );
+  return rows.length > 0;
+}
+
+/// Every workspace with attendance settings, and its clock.
+export async function tenantsWithSettings() {
+  const rows = await q(`select tenant_id, timezone from tenant_settings`);
+  return rows.map((r) => ({ tenantId: r.tenant_id, timezone: r.timezone || 'UTC' }));
+}
+
 export function isNoOpPunch(last, type, { zoneId, forWork }, now = Date.now()) {
   if (type === 'check_in') {
     if (forWork === false) return false;           // a real state change
@@ -418,14 +575,25 @@ export async function recordEvent(
   // finally got through. Judging a replayed 9am arrival against 2pm would call
   // it a stale shift and open a second one.
   const happenedAt = at ? Date.parse(at) : Date.now();
-  if (isNoOpPunch(last, type, { zoneId: zid, forWork },
-                  Number.isFinite(happenedAt) ? happenedAt : Date.now())) {
-    return { id: null, type, at: iso(last && last.at), duplicate: true };
-  }
   // Same trap: a missing accuracy must stay null, not become 0 — "0 m" would
   // claim a perfect fix and remove all the slack the verification allows.
   const rawAcc = num(accuracyM);
   const acc = rawAcc != null && rawAcc >= 0 ? Math.min(rawAcc, 100000) : null;
+  if (isNoOpPunch(last, type, { zoneId: zid, forWork },
+                  Number.isFinite(happenedAt) ? happenedAt : Date.now())) {
+    // Nothing changes on the record — but a phone that says "left the zone"
+    // after a hand check-out is saying WHEN the person really left. Jeeva's
+    // 15 Sep: checked out by hand at 10:51, phone left the zone at 15:25. That
+    // second time is what a manager needs to put the day right.
+    if (PHONE_OBSERVED.has(String(source || 'geofence'))) {
+      notePresenceSignal(tenantId, employeeRef, {
+        type, zoneId: zid, lat: la, lng: ln, accuracyM: acc, source,
+        reason: 'already_in_that_state',
+        at: Number.isFinite(happenedAt) ? new Date(happenedAt).toISOString() : null,
+      });
+    }
+    return { id: null, type, at: iso(last && last.at), duplicate: true };
+  }
 
   // A fix that could not have happened does not get to move the clock.
   //
@@ -465,7 +633,7 @@ export async function recordEvent(
          String(source || 'geofence'), workType ? String(workType).slice(0, 120) : null,
          at],
       );
-  await upsertDaySummary(tenantId, employeeRef);
+  await upsertDaySummary(tenantId, employeeRef, await shiftDayOfEvent(tenantId, employeeRef, rows[0].id, rows[0].at));
   // Gated on hasConfirm, not just on the request. If the DDL never landed (no
   // grant on this database) the punch was inserted WITHOUT confirm_status, so
   // pendingConfirmations can never return it — claiming it is pending would ask
@@ -478,14 +646,43 @@ export async function recordEvent(
   };
 }
 
-// Today's raw events, ascending — the basis for status + the day summary.
-// "Today" is the tenant's LOCAL day (not the DB/UTC day). The location columns
-// and the zone join ride along so myStatus can hand the app a full picture of
-// the day (where each punch happened, whether it checks out) in ONE call —
-// the detail view opened from the phone's banner is built entirely from this.
-async function todaysEvents(tenantId, employeeRef) {
+/// The workplace's calendar day for an instant, as YYYY-MM-DD.
+export function localDay(at, tz) {
+  return new Date(at).toLocaleDateString('en-CA', { timeZone: tz || 'UTC' });
+}
+
+/// Which day each punch belongs to: the day its SHIFT started.
+///
+/// Cutting at midnight split every late shift in two. A 10 PM arrival and a
+/// 2 AM departure became one day that never checked out and a next day with a
+/// departure and no arrival — the admin page read "5:39 AM → 5:29 AM" and
+/// yesterday said "Still on the clock" forever. A departure, or a "not for
+/// work", closes the stretch it ends and is filed with it — as long as that
+/// stretch began inside the same-shift window; past that it was a check-out
+/// that never came, and the late punch stands on its own day.
+export function assignShiftDays(events, tz, { sameShiftMs = SAME_PRESENCE_MS } = {}) {
+  let open = null; // { day, at } of the stretch currently running
+  return events.map((e) => {
+    const at = new Date(e.at).getTime();
+    const own = localDay(e.at, tz);
+    const continues = open != null && at - open.at <= sameShiftMs;
+    let shiftDay = own;
+    if (e.type === 'check_in' && e.for_work !== false) {
+      if (continues) shiftDay = open.day;
+      else open = { day: own, at };
+    } else {
+      if (continues) shiftDay = open.day;
+      open = null;
+    }
+    return { ...e, shiftDay };
+  });
+}
+
+/// A day's punches by shift, not by clock: everything whose shift started that
+/// day, including a departure that landed after midnight.
+async function shiftEvents(tenantId, employeeRef, day) {
   const tz = await tenantTz(tenantId);
-  return q(
+  const rows = await q(
     `select e.id, e.employee_ref, e.type, e.zone_id, e.at, e.for_work, e.source,
             e.work_type, e.lat, e.lng, e.accuracy_m,
             z.name as zone_name, z.center_lat, z.center_lng, z.radius_m,
@@ -493,10 +690,45 @@ async function todaysEvents(tenantId, employeeRef) {
        from events e
        left join zones z on z.id = e.zone_id
       where e.tenant_id = $1 and e.employee_ref = $2
-        and e.at >= (date_trunc('day', now() at time zone $3) at time zone $3)
+        and e.at >= ((($4::date - 1)::timestamp) at time zone $3)
+        and e.at <  ((($4::date + 2)::timestamp) at time zone $3)
       order by e.at asc`,
-    [tenantId, employeeRef, tz],
+    [tenantId, employeeRef, tz, day],
   );
+  return assignShiftDays(rows, tz).filter((e) => e.shiftDay === day);
+}
+
+/// The shift day of one punch — read from the punches around it, so a replayed
+/// or back-dated punch lands where it belongs too.
+async function shiftDayOfEvent(tenantId, employeeRef, eventId, at) {
+  const tz = await tenantTz(tenantId);
+  const t = new Date(at).getTime();
+  const rows = await q(
+    `select id, type, at, for_work from events
+      where tenant_id = $1 and employee_ref = $2 and at >= $3 and at <= $4
+      order by at asc`,
+    [tenantId, employeeRef, new Date(t - 2 * SAME_PRESENCE_MS).toISOString(), new Date(t + 1000).toISOString()],
+  );
+  const hit = assignShiftDays(rows, tz).find((e) => String(e.id) === String(eventId));
+  return hit ? hit.shiftDay : localDay(at, tz);
+}
+
+/// The day a person's status is about. Normally today — but somebody still on
+/// a shift that began last night, or who just finished one after midnight, is
+/// looking at THAT shift until today has punches of its own.
+async function currentShiftDay(tenantId, employeeRef, tz, now = Date.now()) {
+  const today = localDay(now, tz);
+  const rows = await q(
+    `select id, type, at, for_work from events
+      where tenant_id = $1 and employee_ref = $2 and at >= $3
+      order by at asc`,
+    [tenantId, employeeRef, new Date(now - 2 * SAME_PRESENCE_MS).toISOString()],
+  );
+  const assigned = assignShiftDays(rows, tz);
+  const last = assigned[assigned.length - 1];
+  if (!last || now - new Date(last.at).getTime() > SAME_PRESENCE_MS) return today;
+  if (last.shiftDay === today || assigned.some((e) => e.shiftDay === today)) return today;
+  return last.shiftDay;
 }
 
 // Walk paired check_in→check_out intervals; an unmatched trailing check_in is
@@ -513,17 +745,34 @@ async function todaysEvents(tenantId, employeeRef) {
 /// it only ever trims a figure that was already wrong.
 const MAX_OPEN_SHIFT_MS = 12 * 60 * 60 * 1000;
 
+/// A visit shorter than this is not work: a walk past, a drop-off, a phone
+/// that crossed the edge and came straight back. It stays on the record — the
+/// punches are real — but it adds nothing to the hours anyone is paid.
+export const MIN_VISIT_MS = 10 * 60 * 1000;
+
 /// `now` is a parameter because this is not only ever asked about today.
 /// It used to read Date.now() unconditionally, so computing a PAST day that
 /// still had an open shift would have billed every hour since — the guard
 /// against that was a comment saying not to do it.
-export function computeToday(events, { now = Date.now(), maxOpenMs = MAX_OPEN_SHIFT_MS } = {}) {
+export function computeToday(
+  events,
+  { now = Date.now(), maxOpenMs = MAX_OPEN_SHIFT_MS, minVisitMs = MIN_VISIT_MS } = {},
+) {
   let openIn = null; // Date of an unmatched check_in
   let openEvent = null; // ...and the row it came from, for the detail view
   let firstIn = null;
   let lastOut = null;
   let lastZone = null;
   let ms = 0;
+  let shortVisits = 0;
+  // A finished stretch of presence counts only if it lasted long enough to be work.
+  const closeAt = (at) => {
+    const span = at - openIn;
+    if (span >= minVisitMs) ms += span;
+    else if (span > 0) shortVisits += 1;
+    openIn = null;
+    openEvent = null;
+  };
   for (const e of events) {
     const at = new Date(e.at);
     if (e.type === 'check_in') {
@@ -531,7 +780,7 @@ export function computeToday(events, { now = Date.now(), maxOpenMs = MAX_OPEN_SH
       // counting work time from this point — it closes any open interval and does
       // NOT reopen one.
       if (e.for_work === false) {
-        if (openIn) { ms += at - openIn; openIn = null; openEvent = null; }
+        if (openIn) closeAt(at);
         continue;
       }
       firstIn ??= at;
@@ -551,21 +800,19 @@ export function computeToday(events, { now = Date.now(), maxOpenMs = MAX_OPEN_SH
       lastZone = e.zone_id;
     } else if (e.type === 'check_out') {
       lastOut = at;
-      if (openIn) {
-        ms += at - openIn;
-        openIn = null;
-        openEvent = null;
-      }
+      if (openIn) closeAt(at);
     }
   }
   const checkedIn = openIn != null;
-  // An unfinished shift bills what it has run, up to the ceiling. Past that,
-  // the number is not a measurement of anything and must not be paid as one.
+  // An unfinished shift bills what it has run while it plausibly still runs.
+  // Past the ceiling it is a check-out that never came, and it bills NOTHING:
+  // paying a forgotten shift as twelve hours was a number nobody measured.
+  // The day shows "No check-out" and a manager fixes it with the real time.
   let openTooLong = false;
   if (checkedIn) {
     const running = now - openIn.getTime();
     openTooLong = running > maxOpenMs;
-    ms += Math.max(0, Math.min(running, maxOpenMs));
+    if (!openTooLong) ms += Math.max(0, running);
   }
   return {
     checkedIn,
@@ -578,20 +825,22 @@ export function computeToday(events, { now = Date.now(), maxOpenMs = MAX_OPEN_SH
     // than a measurement. Whoever approves the day has to be told that.
     openTooLong,
     unclosed: checkedIn,
+    shortVisits,
     totalMinutes: Math.max(0, Math.round(ms / 60000)),
   };
 }
 
 export async function myStatus(tenantId, employeeRef) {
   const tz = await tenantTz(tenantId);
-  const rows = await todaysEvents(tenantId, employeeRef);
+  const day = await currentShiftDay(tenantId, employeeRef, tz);
+  const rows = await shiftEvents(tenantId, employeeRef, day);
   const t = computeToday(rows);
   const events = rows.map(eventOut).reverse();       // newest first, for display
   const dayV = dayVerification(events);
   const open = t.openEvent ? eventOut(t.openEvent) : null;
   const today = rows.length
     ? {
-        date: new Date().toLocaleDateString('en-CA', { timeZone: tz }),
+        date: day,
         totalMinutes: t.totalMinutes,
         firstIn: iso(t.firstIn),
         lastOut: iso(t.lastOut),
@@ -641,7 +890,7 @@ async function verificationIndex(tenantId, { from = null, to = null, employeeRef
   ];
   if (employeeRef) { params.push(employeeRef); clauses.push(`e.employee_ref = $${params.length}`); }
   const rows = await q(
-    `select e.employee_ref, e.lat, e.lng, e.accuracy_m, e.zone_id,
+    `select e.employee_ref, e.type, e.source, e.lat, e.lng, e.accuracy_m, e.zone_id,
             z.name as zone_name, z.center_lat, z.center_lng, z.radius_m,
             (e.at at time zone $2)::date as day
        from events e
@@ -653,7 +902,7 @@ async function verificationIndex(tenantId, { from = null, to = null, employeeRef
   for (const r of rows) {
     const key = `${r.employee_ref}|${dayStr(r.day)}`;
     const list = grouped.get(key) || [];
-    list.push({ verification: verifyOut(locationOut(r)).state });
+    list.push({ verification: verifyOut(locationOut(r), r).state });
     grouped.set(key, list);
   }
   const out = new Map();
@@ -714,7 +963,7 @@ export async function myHistory(tenantId, employeeRef, days = 7, { from = null, 
   const tz = await tenantTz(tenantId);
   const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: tz });
   const live = dates.includes(todayStr)
-    ? computeToday(await todaysEvents(tenantId, employeeRef))
+    ? computeToday(await shiftEvents(tenantId, employeeRef, todayStr))
     : null;
   const running = live && live.checkedIn ? live : null;
 
@@ -860,13 +1109,13 @@ export async function presence(tenantId) {
           order by employee_ref, at desc
        ),
        located as (
-         select distinct on (employee_ref) employee_ref, lat, lng, accuracy_m, zone_id, at
+         select distinct on (employee_ref) employee_ref, type, source, lat, lng, accuracy_m, zone_id, at
            from events, day_start
           where tenant_id = $1 and at >= day_start.t
             and lat is not null and lng is not null
           order by employee_ref, at desc
        )
-       select l.employee_ref, l.type, l.at,
+       select l.employee_ref, l.type, l.at, g.type as located_type, g.source as located_source,
               g.lat, g.lng, g.accuracy_m, g.zone_id, g.at as located_at,
               z.name as zone_name, z.center_lat, z.center_lng, z.radius_m,
               coalesce(m.name, '') as name
@@ -883,7 +1132,7 @@ export async function presence(tenantId) {
     zones,
     employees: rows.map((r) => {
       const loc = locationOut(r);
-      const v = verifyOut(loc);
+      const v = verifyOut(loc, { type: r.located_type, source: r.located_source });
       return {
         employeeRef: r.employee_ref,
         name: r.name || '',
@@ -939,7 +1188,7 @@ export async function eventLog(
 // One punch, normalized: when, what, where, and whether the where checks out.
 const eventOut = (r) => {
   const location = locationOut(r);
-  const v = verifyOut(location);
+  const v = verifyOut(location, r);
   return {
     id: String(r.id),
     employeeRef: r.employee_ref,
@@ -1030,13 +1279,35 @@ export async function attendanceToday(tenantId, cutoffHour = 9) {
   };
 }
 
-// Recompute today's summary (first_in, last_out, total_minutes) from events.
-async function upsertDaySummary(tenantId, employeeRef) {
+// Recompute ONE day's summary (first_in, last_out, total_minutes) — today by
+// default, or the day a shift, a replayed punch or a manager's fix belongs to.
+// A manager's correction wins over the punches; a day left with neither is
+// removed rather than kept as an empty row somebody might approve.
+async function upsertDaySummary(tenantId, employeeRef, day = null) {
   const tz = await tenantTz(tenantId);
-  const t = computeToday(await todaysEvents(tenantId, employeeRef));
+  const d = day || localDay(Date.now(), tz);
+  const [rows, fix] = await Promise.all([
+    shiftEvents(tenantId, employeeRef, d),
+    dayCorrection(tenantId, employeeRef, d),
+  ]);
+  if (!rows.length && !fix) {
+    await q(
+      `delete from day_summaries where tenant_id = $1 and employee_ref = $2 and day = $3::date`,
+      [tenantId, employeeRef, d],
+    );
+    return;
+  }
+  const computed = computeToday(rows);
+  const t = fix
+    ? {
+        firstIn: fix.first_in,
+        lastOut: fix.last_out,
+        totalMinutes: Math.max(0, Math.round((new Date(fix.last_out) - new Date(fix.first_in)) / 60000)),
+      }
+    : computed;
   await q(
     `insert into day_summaries (tenant_id, employee_ref, day, first_in, last_out, total_minutes, updated_at)
-     values ($1, $2, (now() at time zone $6)::date, $3, $4, $5, now())
+     values ($1, $2, $6::date, $3, $4, $5, now())
      on conflict (tenant_id, employee_ref, day)
      do update set first_in = excluded.first_in, last_out = excluded.last_out,
                    total_minutes = excluded.total_minutes, updated_at = now(),
@@ -1060,7 +1331,7 @@ async function upsertDaySummary(tenantId, employeeRef) {
                        or day_summaries.last_out is distinct from excluded.last_out
                        or day_summaries.first_in is distinct from excluded.first_in
                      then null else day_summaries.approved_at end`,
-    [tenantId, employeeRef, t.firstIn, t.lastOut, t.totalMinutes, tz],
+    [tenantId, employeeRef, t.firstIn, t.lastOut, t.totalMinutes, d],
   );
 }
 
@@ -1623,23 +1894,49 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
   if (status) { params.push(status); clauses.push(`ds.approval_status = $${params.length}`); }
   // Still on the clock: a check-in on that day later than its last check-out.
   // last_out alone cannot say — someone who left at 4:25 and came back at
-  // 4:30 keeps a last_out of 4:25 while the clock runs.
+  // 4:30 keeps a last_out of 4:25 while the clock runs. And only while it can
+  // still be running: past the same-shift window it is a check-out that never
+  // came, not a shift in progress, and it must read that way.
+  await ensureSimplifyTables();
   params.push(await tenantTz(tenantId));
   const tzParam = params.length;
   const rows = await q(
     `select ds.employee_ref, ds.day, ds.first_in, ds.last_out, ds.total_minutes,
             ds.approval_status, ds.approved_by, ds.approved_at,
             coalesce(m.name, '') as name, m.pay_rate, sc.expected_minutes,
-            exists (
-              select 1 from events e
-               where e.tenant_id = ds.tenant_id and e.employee_ref = ds.employee_ref
-                 and e.type = 'check_in' and e.for_work is distinct from false
-                 and (e.at at time zone $${tzParam})::date = ds.day
-                 and e.at > coalesce(ds.last_out, 'epoch'::timestamptz)
-            ) as open
+            late_in.at as trailing_in_at,
+            dc.corrected_by, dc.corrected_at, dc.note as correction_note,
+            -- Every check-out tapped by hand during the day, paired with the
+            -- last time the phone then reported leaving before they came back.
+            (select json_agg(json_build_object('out', o.at, 'left', sig.at) order by o.at)
+               from events o
+               join lateral (
+                 select max(s.at) as at from presence_signals s
+                  where s.tenant_id = o.tenant_id and s.employee_ref = o.employee_ref
+                    and s.type = 'check_out'
+                    and s.at > o.at and s.at < o.at + interval '12 hours'
+                    and not exists (
+                      select 1 from events n
+                       where n.tenant_id = o.tenant_id and n.employee_ref = o.employee_ref
+                         and n.type = 'check_in' and n.at > o.at and n.at < s.at
+                    )
+               ) sig on sig.at is not null
+              where o.tenant_id = ds.tenant_id and o.employee_ref = ds.employee_ref
+                and o.type = 'check_out' and o.source in ('banner', 'manual')
+                and ds.first_in is not null
+                and o.at between ds.first_in and coalesce(ds.last_out, now())
+            ) as hand_outs
        from day_summaries ds
        left join memberships m on m.tenant_id = ds.tenant_id and m.employee_ref = ds.employee_ref
        left join schedules  sc on sc.tenant_id = ds.tenant_id and sc.employee_ref = ds.employee_ref and sc.day = ds.day
+       left join day_corrections dc on dc.tenant_id = ds.tenant_id and dc.employee_ref = ds.employee_ref and dc.day = ds.day
+       left join lateral (
+         select max(e.at) as at from events e
+          where e.tenant_id = ds.tenant_id and e.employee_ref = ds.employee_ref
+            and e.type = 'check_in' and e.for_work is distinct from false
+            and (e.at at time zone $${tzParam})::date = ds.day
+            and e.at > coalesce(ds.last_out, 'epoch'::timestamptz)
+       ) late_in on true
       where ${clauses.join(' and ')}
       order by ds.day desc, name`,
     params,
@@ -1664,7 +1961,7 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
       approvalStatus: r.approval_status || 'pending',
       approvedBy: r.approved_by || null,
       approvedAt: iso(r.approved_at),
-      open: r.open === true,
+      ...dayFlags(r),
       confirmStatus: ci.get(`${r.employee_ref}|${day}`) || null,
       payRate: r.pay_rate == null ? null : Number(r.pay_rate),
       // This day never got a check-out.
@@ -1682,6 +1979,72 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
       ...(vi.get(`${r.employee_ref}|${day}`) || NO_EVENTS),
     };
   });
+}
+
+/// What a manager needs to know about a day, decided in one place so the web
+/// page, the morning summary and Approve week can never disagree.
+///
+/// Three things need a fix, plus one that exists only until the app stops
+/// offering a Check out button:
+///   no_check_out   — a shift that started and never ended
+///   no_check_in    — a departure with no arrival before it
+///   over_12h       — longer than any real shift here
+///   left_later     — checked out by hand, but the phone saw them leave much
+///                    later (Jeeva, 15 Sep: 10:51 by hand, 3:25 PM by phone,
+///                    then back in at another zone at 3:33 — so it is never
+///                    only the day's last check-out that matters)
+/// A manager's correction resolves all of them; "changed" just says it happened.
+const LEFT_LATER_MIN_MS = 10 * 60 * 1000;
+const NEEDS_FIX = new Set(['no_check_out', 'no_check_in', 'over_12h', 'left_later']);
+
+export function dayFlags(r, { now = Date.now(), sameShiftMs = SAME_PRESENCE_MS } = {}) {
+  const trailingIn = r.trailing_in_at ? new Date(r.trailing_in_at).getTime() : null;
+  const open = trailingIn != null && now - trailingIn <= sameShiftMs;
+  const corrected = Boolean(r.corrected_by);
+  const handOuts = (Array.isArray(r.hand_outs) ? r.hand_outs : [])
+    .map((h) => ({ checkedOutAt: iso(h.out), leftZoneAt: iso(h.left) }))
+    .filter((h) => h.checkedOutAt && h.leftZoneAt
+      && new Date(h.leftZoneAt) - new Date(h.checkedOutAt) >= LEFT_LATER_MIN_MS);
+  const flags = [];
+  if (corrected) {
+    flags.push('changed');
+  } else {
+    if (trailingIn != null && !open) flags.push('no_check_out');
+    if (!r.first_in && r.last_out) flags.push('no_check_in');
+    if (Number(r.total_minutes || 0) > 12 * 60) flags.push('over_12h');
+    if (handOuts.length) flags.push('left_later');
+  }
+  return {
+    open,
+    flags,
+    needsFix: flags.some((f) => NEEDS_FIX.has(f)),
+    corrected,
+    correctedBy: r.corrected_by || null,
+    correctedAt: iso(r.corrected_at),
+    correctionNote: r.correction_note || '',
+    // The phone's word on when they really left, for the Fix times sheet.
+    handOuts: corrected ? [] : handOuts,
+    leftZoneAt: !corrected && handOuts.length ? handOuts[handOuts.length - 1].leftZoneAt : null,
+  };
+}
+
+/// Approve a person's week in one go. Refuses while any day in it still needs
+/// a fix — pay should not go out on a number with a known hole in it — and
+/// leaves a shift that is still running for next time.
+export async function approveWeek(tenantId, employeeRef, from, to, approvedBy) {
+  const days = (await listApprovals(tenantId, { from, to }))
+    .filter((d) => String(d.employeeRef) === String(employeeRef));
+  const needsFix = days.filter((d) => d.needsFix);
+  if (needsFix.length) return { ok: false, needsFix: needsFix.map((d) => d.day) };
+  const toApprove = days.filter((d) => !d.open && d.approvalStatus !== 'approved');
+  for (const d of toApprove) await setApproval(tenantId, employeeRef, d.day, 'approved', approvedBy);
+  const settled = days.filter((d) => !d.open);
+  return {
+    ok: true,
+    approvedDays: toApprove.length,
+    days: settled.length,
+    totalMinutes: settled.reduce((n, d) => n + d.totalMinutes, 0),
+  };
 }
 
 export async function setApproval(tenantId, employeeRef, day, status, approvedBy) {
@@ -1724,18 +2087,23 @@ export async function deleteManualEvent(tenantId, eventId) {
   );
   if (!rows.length) return null;
   const employeeRef = String(rows[0].employee_ref);
-  await upsertDaySummary(tenantId, employeeRef);
+  const tz = await tenantTz(tenantId);
+  const day = localDay(rows[0].at, tz);
+  await upsertDaySummary(tenantId, employeeRef, day);
+  // A removed early-morning check-out may have belonged to the night before.
+  const before = localDay(new Date(rows[0].at).getTime() - 24 * 60 * 60 * 1000, tz);
+  await upsertDaySummary(tenantId, employeeRef, before);
   return { employeeRef, type: rows[0].type, at: iso(rows[0].at) };
 }
 
 export async function manualEntry(tenantId, employeeRef, type, at = null) {
   const t = type === 'check_out' ? 'check_out' : 'check_in';
-  await q(
+  const rows = await q(
     `insert into events (tenant_id, employee_ref, type, at, for_work, source)
-     values ($1, $2, $3, coalesce($4::timestamptz, now()), true, 'manual')`,
+     values ($1, $2, $3, coalesce($4::timestamptz, now()), true, 'manual') returning id, at`,
     [tenantId, employeeRef, t, at],
   );
-  await upsertDaySummary(tenantId, employeeRef);
+  await upsertDaySummary(tenantId, employeeRef, await shiftDayOfEvent(tenantId, employeeRef, rows[0].id, rows[0].at));
   return { employeeRef: String(employeeRef), type: t };
 }
 
