@@ -162,11 +162,7 @@
     tbody tr:hover { background:var(--card-2); }
     .num { font-variant-numeric:tabular-nums; }
 
-    /* List rows (history / zones as chips) */
-    .rowitem { display:flex; align-items:center; gap:12px; padding:12px 4px; border-bottom:1px solid var(--line); }
-    .rowitem:last-child { border-bottom:none; }
-    .rowitem .lead-ic { width:34px; height:34px; border-radius:10px; background:var(--primary-weak); color:var(--primary); display:grid; place-items:center; flex:none; }
-    .rowitem .grow { flex:1; min-width:0; }
+    /* Chips */
     .chips { display:flex; flex-wrap:wrap; gap:8px; }
     .chip { display:inline-flex; align-items:center; gap:7px; padding:7px 12px; border-radius:999px; background:var(--card-2); border:1px solid var(--line); font-size:.82rem; }
     .chip .ic { color:var(--primary); width:15px; height:15px; }
@@ -340,17 +336,58 @@
     .periods button:hover { color:var(--ink); }
     .periods button.active { background:var(--primary); color:var(--primary-ink); }
     .periods button:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
-    /* The chosen period's own dates, shown small under the control: "This month"
-       is only meaningful if you can see which days it actually covers. */
-    /* The number the screen exists to answer, at the size that means nobody
-       has to work it out from a start time. */
-    .bigclock { margin:10px 0 0; }
-    .bigclock span { font-size:3rem; font-weight:800; letter-spacing:-.03em; line-height:1; font-variant-numeric:tabular-nums; }
-    .bigclock__lbl { font-size:.85rem; color:var(--muted); margin-top:2px; }
-    .rangerow { display:flex; align-items:center; gap:8px; margin:0 0 12px; }
-    .rangenote { color:var(--faint); font-size:.74rem; }
-    .rangerow .btn.link { margin-left:auto; font-size:.74rem; padding:2px 0; flex-shrink:0; }
-    .rangerow .btn.link.active { text-decoration:underline; }
+    /* ---- Staff: one quiet page ----
+       The app bar above already says Attendance, so the page keeps no header
+       or tabs of its own. */
+    body.staff header, body.staff nav { display:none; }
+    body.staff main { max-width:560px; padding-top:16px; }
+    .now__row { display:flex; align-items:center; gap:10px; }
+    .now__dot { width:10px; height:10px; border-radius:50%; flex:none; background:var(--faint); }
+    .now--in .now__dot { background:var(--success); }
+    .now--out .now__dot { background:var(--warn); }
+    .now__state { font-size:1.05rem; font-weight:700; letter-spacing:-.01em; }
+    .now__line { color:var(--muted); font-size:.86rem; margin:3px 0 0 20px; }
+    .now__act { margin-top:14px; }
+    .btn.block { width:100%; justify-content:center; padding:11px 14px; }
+    .btn:disabled { opacity:.5; cursor:default; }
+    .btn:disabled:hover { border-color:var(--line); }
+    .goout { display:grid; gap:10px; padding-top:14px; border-top:1px solid var(--line); }
+    .goout__q { font-weight:650; font-size:.9rem; }
+    .reasons { display:flex; flex-wrap:wrap; gap:8px; }
+    .reason {
+      font:inherit; font-size:.82rem; padding:7px 12px; border-radius:999px; cursor:pointer;
+      border:1px solid var(--line); background:var(--card-2); color:var(--ink);
+    }
+    .reason.on { background:var(--primary-weak); border-color:var(--primary); color:var(--primary); font-weight:650; }
+    .hint { color:var(--muted); font-size:.8rem; margin:0; line-height:1.4; }
+    .hint.pad { padding:12px 2px; }
+    .acts { display:flex; gap:8px; justify-content:flex-end; align-items:center; }
+    .acts .btn.link, .acts .hint { margin-right:auto; }
+    .acts .btn.link { padding-left:0; }
+    .tiles { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:14px; }
+    .tile { background:var(--card); border:1px solid var(--line); border-radius:var(--radius-sm); padding:12px; box-shadow:var(--shadow); }
+    .tile__n { font-size:1.15rem; font-weight:750; letter-spacing:-.01em; font-variant-numeric:tabular-nums; }
+    .tile__l { font-size:.74rem; color:var(--muted); margin-top:2px; }
+    .dates { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:4px 0 6px; }
+    .dates .field input { width:100%; }
+    /* Four periods on one line at phone width, "Dates" included. */
+    body.staff .periods button { padding:7px 6px; }
+    .rangehead { display:flex; justify-content:space-between; align-items:baseline; gap:8px; margin:8px 2px 2px; font-size:.8rem; color:var(--muted); }
+    .rangehead b { color:var(--ink); font-variant-numeric:tabular-nums; }
+    .day {
+      font:inherit; color:inherit; background:none; border:0; border-bottom:1px solid var(--line);
+      width:100%; text-align:left; cursor:pointer; padding:12px 2px;
+      display:grid; grid-template-columns:1fr auto; column-gap:12px; row-gap:2px; align-items:center;
+    }
+    .day__d { font-weight:650; font-size:.9rem; }
+    .day__t { grid-column:1; color:var(--muted); font-size:.8rem; font-variant-numeric:tabular-nums; }
+    .day__m { grid-column:2; grid-row:1 / 3; font-weight:700; font-variant-numeric:tabular-nums; }
+    .day:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; border-radius:8px; }
+    .punches { padding:6px 2px 10px; border-bottom:1px solid var(--line); }
+    #mdays > .day:nth-last-child(2):has(+ .punches[hidden]), #mdays > .punches:last-child { border-bottom:0; }
+    .punch { display:grid; grid-template-columns:72px 1fr; gap:10px; padding:4px 0; font-size:.84rem; }
+    .punch__t { color:var(--muted); font-variant-numeric:tabular-nums; }
+    .punch__r { display:block; color:var(--muted); font-size:.78rem; }
     .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
     .toolbar input[type="search"], .toolbar input.search { flex:1; min-width:180px; }
     .toolbar select { width:auto; min-width:120px; }
@@ -417,38 +454,6 @@
     const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
     const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-    // Named periods, resolved against the phone's own calendar.
-    //
-    // Weeks start on MONDAY. A rota week that starts on Sunday (the JS default
-    // for getDay() === 0) would put Sunday's hours in the wrong week and make
-    // every weekly total disagree with the day rows underneath it.
-    const PERIODS = {
-      today:  { label: 'Today',      range: () => { const d = new Date(); return [ymd(d), ymd(d)]; } },
-      week:   { label: 'Week',       range: () => {
-        const d = new Date(); const dow = (d.getDay() + 6) % 7;   // Mon = 0
-        const s = new Date(d); s.setDate(d.getDate() - dow);
-        return [ymd(s), ymd(d)];
-      } },
-      month:  { label: 'Month',      range: () => {
-        const d = new Date();
-        return [ymd(new Date(d.getFullYear(), d.getMonth(), 1)), ymd(d)];
-      } },
-      last:   { label: 'Last month', range: () => {
-        const d = new Date();
-        return [ymd(new Date(d.getFullYear(), d.getMonth() - 1, 1)),
-                ymd(new Date(d.getFullYear(), d.getMonth(), 0))];
-      } },
-    };
-
-    // Which preset a from/to pair corresponds to, so reopening a screen shows
-    // the chip you chose rather than always falling back to Custom.
-    const presetFor = (from, to) => {
-      for (const [k, p] of Object.entries(PERIODS)) {
-        const [f, t] = p.range();
-        if (f === from && t === to) return k;
-      }
-      return 'custom';
-    };
     // The restaurant's calendar and clock, whatever device is looking.
     const todayTZ = () => new Date().toLocaleDateString('en-CA', TZ ? { timeZone: TZ } : {});
     const addDaysYmd = (d, n) => { const [y, m, dd] = d.split('-').map(Number); return new Date(Date.UTC(y, m - 1, dd + n)).toISOString().slice(0, 10); };
@@ -498,25 +503,6 @@
       partial:    { label: 'Partly verified', cls: 'pending', hint: 'Some punches this day had no location to check.' },
       unverified: { label: 'Unverified', cls: 'pending', hint: 'No location was recorded, so the system could not confirm it. The record still counts.' },
       outside:    { label: 'Outside zone', cls: 'rejected', hint: 'Recorded outside the work zone.' },
-    };
-    /// Did a person vouch for this shift — a different question from whether the
-    /// phone's location backed it up, and shown separately because the two fail
-    /// independently. Nothing is drawn when confirmation never applied (a
-    /// manager's own shift, or the setting switched off): an empty cell says
-    /// "not asked", which is the truth, where a grey "—" would read as a
-    /// failure.
-    // Classes reuse the existing pill palette — approved/pending/rejected — so
-    // these read as the same family as the location badge beside them rather
-    // than as a second, differently-styled idea.
-    const CONFIRM = {
-      confirmed:   { cls: 'approved', label: 'Confirmed',     hint: 'A manager confirmed this person was on site.' },
-      pending:     { cls: 'pending',  label: 'Awaiting you',  hint: 'Nobody has confirmed this arrival yet. The clock is running either way.' },
-      unconfirmed: { cls: 'pending',  label: 'Not confirmed', hint: 'The shift ended before anyone confirmed the person was on site. The hours still count.' },
-      rejected:    { cls: 'rejected', label: 'Marked absent', hint: 'A manager recorded that this person was not on site at check-in.' },
-    };
-    const cbadge = (state) => {
-      const c = CONFIRM[state];
-      return c ? `<span class="pill ${c.cls}" title="${esc(c.hint)}">${esc(c.label)}</span>` : '';
     };
 
     const vbadge = (state, reason) => {
@@ -620,7 +606,7 @@
     const TABS = {
       today: ['Today', 'activity'], timesheets: ['Timesheets', 'chart'],
       people: ['People', 'users'], setup: ['Setup', 'sliders'],
-      me: ['My attendance', 'user'], history: ['History', 'history'],
+      me: ['My attendance', 'user'],
     };
     // Two branches of one shell — the tab set is the only thing that differs.
     //
@@ -628,7 +614,7 @@
     // split a single question across several screens: "what did this person
     // work" needed Logs, Approvals and Report, each with its own date range.
     const ADMIN_TABS = ['today', 'timesheets', 'setup'];
-    const STAFF_TABS = ['me', 'history'];
+    const STAFF_TABS = ['me'];
     // How each Eesa-owned appRole reads in the header.
     const ROLE_LABEL = { admin: 'Admin', staff: 'Staff' };
 
@@ -651,6 +637,7 @@
           return;
         }
         const tabs = appRole === 'admin' ? ADMIN_TABS : STAFF_TABS;
+        document.body.classList.toggle('staff', appRole !== 'admin');
         $('nav').innerHTML = tabs.map((k) => `<button data-tab="${k}">${ic(TABS[k][1])}<span>${TABS[k][0]}</span></button>`).join('');
         $('nav').querySelectorAll('button').forEach((b) => b.onclick = () => go(b.dataset.tab));
         go(tabs[0]);
@@ -675,139 +662,225 @@
     const VIEWS = {};
 
     // ==================== STAFF ====================
-    VIEWS.me = async () => {
-      let st = null, zones = [];
-      try { st = await api('/api/getMyStatus'); } catch (e) { throw new Error('Could not load your status: ' + e.message); }
-      // Every status response carries the workplace zone; adopt it before a
-      // single time is rendered.
-      if (st && st.timezone) TZ = st.timezone;
-      try { zones = await api('/api/getMyZones'); } catch (_) { zones = []; }
-      const on = !!(st && st.checkedIn);
-      const t = (st && st.today) || null;
-      const evs = (st && st.events) || [];
-      const where = on && st.zoneName ? ` at ${st.zoneName}` : '';
-      // The order is the order the questions get asked: am I on the clock, for
-      // how long, did today record correctly, and where does this even apply.
-      // Hours-worked is the headline because it is the number people open this
-      // for; first-in and last-out are the supporting detail, not the lead.
-      const baseMin = Number((st && st.todayMinutes) || 0);
-      const readAt = Date.now();
-      $('view').innerHTML = `
-        <div class="hero ${on ? 'hero--on' : ''}">
-          <div class="hero__top">
-            <div class="hero__badge"></div>
-            <div class="hero__state">${on ? 'On the clock' : 'Off the clock'}</div>
-          </div>
-          <div class="bigclock"><span id="meclock">${dur(baseMin)}</span></div>
-          <div class="bigclock__lbl">today</div>
-          <div class="hero__sub">${on && st.since ? `Since ${timeOf(st.since)}${esc(where)}` : 'Arriving at a work zone checks you in automatically'}</div>
-          ${t && (t.firstIn || t.lastOut) ? `<div class="stats">
-            <div class="stat"><div class="stat__num num">${timeOf(t.firstIn)}</div><div class="stat__lbl">First in</div></div>
-            <div class="stat"><div class="stat__num num">${t.lastOut ? timeOf(t.lastOut) : '—'}</div><div class="stat__lbl">Last out</div></div>
-          </div>` : ''}
-        </div>
-        <div class="card">
-          <h2>${ic('history')} Today’s punches</h2>
-          ${evs.length ? evs.map(eventHtml).join('') : empty('history', 'Nothing recorded yet today.')}
-          ${evs.some((e) => e.verification !== 'verified') ? `<p class="muted" style="font-size:.76rem;margin:12px 0 0">${esc(VERIFY.unverified.hint)}</p>` : ''}
-        </div>
-        <div class="card">
-          <h2>${ic('pin')} Your work zones</h2>
-          ${zones.length
-            ? `<div class="chips">${zones.map((z) => `<span class="chip">${ic('pin')}${esc(z.name)}</span>`).join('')}</div>`
-            : empty('pin', 'No work zones assigned yet — ask an admin to add one.')}
-          <p class="muted" style="font-size:.78rem;margin:14px 0 0">Check-in and check-out happen automatically when you arrive at and leave a zone, from the Eesa app on your phone. You do not need to open anything.</p>
-        </div>`;
-
-      // Keep the clock honest while the page is open.
-      //
-      // The server already counted the open shift up to the moment it answered,
-      // so the only correction is the time since — not a re-derivation from
-      // `since`, which would double-count every earlier shift on a day with
-      // more than one. Only runs while actually on the clock, and only while
-      // this view is the one on screen.
-      clearInterval(ME_TICK);
-      if (on) {
-        ME_TICK = setInterval(() => {
-          const el = $('meclock');
-          if (!el || TAB !== 'me') { clearInterval(ME_TICK); return; }
-          el.textContent = dur(baseMin + Math.floor((Date.now() - readAt) / 60000));
-        }, 20000);
-      }
+    // One page, in the order the questions come: am I at work, I'm going out on
+    // an errand, and how many hours have I done. Arriving and leaving record
+    // themselves, so nothing here starts a shift. The one way to end one is
+    // "Done for the day" while out on an errand, when no phone is at work to see
+    // the person leave.
+    const ERRANDS = ['Buying groceries', 'Meeting a customer', 'Delivery', 'Bank'];
+    // "9:02 AM" on the restaurant's clock.
+    const hm = (iso) => iso
+      ? new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', ...(TZ ? { timeZone: TZ } : {}) })
+      : '—';
+    const MINE = { period: 'week', from: null, to: null, seq: 0, refresh: null };
+    const MINE_PERIODS = {
+      week: ['This week', () => [weekRange(0)[0], todayTZ()]],
+      last: ['Last week', () => weekRange(-1)],
+      month: ['This month', () => { const t = todayTZ(); return [t.slice(0, 8) + '01', t]; }],
+      custom: ['Dates', () => [MINE.from, MINE.to]],
     };
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && TAB === 'me' && MINE.refresh) MINE.refresh();
+    });
 
-    // A day's own words for its state. "Incomplete" is right for a shift that
-    // ended without a check-out and wrong for one that simply has not finished
-    // yet — and it is the second that somebody sees while they are still at work.
-    const DAY_STATUS = { open: 'On the clock', complete: 'Complete', incomplete: 'Incomplete' };
-    const dayStatusLabel = (s) => DAY_STATUS[s] || s;
+    VIEWS.me = async () => {
+      let st = await api('/api/getMyStatus');
+      if (st.timezone) TZ = st.timezone;
+      const today = todayTZ();
+      const yesterday = addDaysYmd(today, -1);
+      const monday = weekRange(0)[0];
+      const recent = ((await api('/api/getMyHistory?' + new URLSearchParams({
+        from: monday < yesterday ? monday : yesterday, to: today,
+      }))) || {}).days || [];
+      const minutesOn = (d) => Number((recent.find((r) => r.date === d) || {}).totalMinutes || 0);
+      const earlierThisWeek = recent
+        .filter((r) => r.date >= monday && r.date < today)
+        .reduce((a, r) => a + Number(r.totalMinutes || 0), 0);
+      // The server counted the open shift up to the moment it answered; only the
+      // minutes since then are added here.
+      let readAt = Date.now();
+      let asking = null; // null | 'errand' | 'end'
+      const todayNow = () => Number(st.todayMinutes || 0) + (st.checkedIn ? Math.floor((Date.now() - readAt) / 60000) : 0);
 
-    VIEWS.history = async () => {
-      // Same period control the admin timesheet uses, for the same reason: "how
-      // many hours have I done this month" is the question people actually open
-      // this screen with, and a fixed 30-day window can only ever answer it by
-      // accident.
       $('view').innerHTML = `
-        <div class="card">
-          <h2>${ic('history')} Your hours</h2>
-          ${rangeBar('hi')}
-          <div id="hitot"></div>
-          <div id="hiout" class="muted">Loading…</div>
-        </div>`;
+        <section class="card now" id="mnow"></section>
+        <div class="tiles">
+          <div class="tile"><div class="tile__n" id="mtoday"></div><div class="tile__l">Today</div></div>
+          <div class="tile"><div class="tile__n">${dur(minutesOn(yesterday))}</div><div class="tile__l">Yesterday</div></div>
+          <div class="tile"><div class="tile__n" id="mweek"></div><div class="tile__l">This week</div></div>
+        </div>
+        <section class="card">
+          <div class="periods" id="mp">${Object.entries(MINE_PERIODS).map(([k, [label]]) =>
+            `<button type="button" data-p="${k}">${k === 'custom' ? `${ic('calendar')} ` : ''}${label}</button>`).join('')}</div>
+          <div class="dates" id="mdates" hidden>
+            <label class="field">From<input type="date" id="mfrom"></label>
+            <label class="field">To<input type="date" id="mto"></label>
+          </div>
+          <div class="rangehead"><span id="mrange"></span><b id="msum"></b></div>
+          <div id="mdays"></div>
+        </section>`;
 
-      const run = async () => {
-        $('hiout').innerHTML = '<span class="muted">Loading…</span>';
-        $('hitot').innerHTML = '';
-        const data = await api('/api/getMyHistory?' + new URLSearchParams({ from: RANGE.from, to: RANGE.to }));
-        const rows = (data && data.days) || [];             // server returns { days: [...] }
-        const totalMin = rows.reduce((a, r) => a + (Number(r.totalMinutes) || 0), 0);
-        const worked = rows.filter((r) => (Number(r.totalMinutes) || 0) > 0).length;
-        $('hitot').innerHTML = `
-          <div class="stats" style="margin:0 0 14px">
-            <div class="stat" style="background:var(--card-2)"><div class="stat__num num">${hrs(totalMin)}</div><div class="stat__lbl">Hours</div></div>
-            <div class="stat" style="background:var(--card-2)"><div class="stat__num num">${worked}</div><div class="stat__lbl">Days worked</div></div>
-            <div class="stat" style="background:var(--card-2)"><div class="stat__num num">${worked ? hrs(totalMin / worked) : '0.0'}</div><div class="stat__lbl">Avg / day</div></div>
-          </div>`;
-        $('hiout').innerHTML = `
-          ${rows.length ? rows.map((r) => `
-            <div class="rowitem" data-hday="${esc(r.date)}" style="cursor:pointer">
-              <div class="lead-ic">${ic('calendar')}</div>
-              <div class="grow">
-                <div style="font-weight:650">${esc(dateNice(r.date))}</div>
-                <div class="muted" style="font-size:.78rem">${timeOf(r.firstIn)} → ${r.lastOut ? timeOf(r.lastOut) : 'still open'}</div>
-                <div style="margin-top:4px">${vbadge(r.verification)}${cbadge(r.confirmStatus)}</div>
-              </div>
-              <div style="text-align:right">
-                <div class="num" style="font-weight:700">${hrs(r.totalMinutes)} h</div>
-                ${r.status ? `<span class="pill ${esc(r.status)}">${esc(dayStatusLabel(r.status))}</span>` : ''}
-              </div>
-            </div>
-            <div id="hev-${esc(r.date)}" style="display:none;padding:0 4px 10px"></div>`).join('') : empty('history', 'No attendance in this period. Pick a wider range, or your days will appear here once you start checking in.')}
-          ${rows.some((r) => r.verification !== 'verified') ? `<p class="muted" style="font-size:.76rem;margin:12px 0 0">Days marked <em>Unverified</em> are still yours and still count — it only means the app couldn’t confirm the location at the time (no GPS signal, or the entry was logged by an admin). Tap a day to see each punch.</p>` : ''}`;
-      // Tap a day to see the punches behind it, including any the system could
-      // not verify — those are exactly the ones a person needs to be able to
-      // look at and explain.
-      $('hiout').querySelectorAll('[data-hday]').forEach((el) => {
-        el.onclick = async () => {
-          const day = el.dataset.hday;
-          const box = $('hev-' + day);
-          if (!box) return;
-          if (box.style.display !== 'none') { box.style.display = 'none'; return; }
-          box.style.display = '';
-          box.innerHTML = '<span class="muted" style="font-size:.8rem">Loading…</span>';
-          try {
-            const evs = await api('/api/getMyEvents?' + new URLSearchParams({ from: day, to: day }));
-            box.innerHTML = evs.length ? evs.slice().reverse().map(eventHtml).join('')
-              : '<span class="muted" style="font-size:.8rem">No individual punches recorded for this day.</span>';
-          } catch (e) {
-            box.innerHTML = `<span class="err" style="font-size:.8rem">${esc(e.message)}</span>`;
-          }
-        };
-      });
+      const totals = () => {
+        if (!$('mtoday')) return;
+        $('mtoday').textContent = dur(todayNow());
+        $('mweek').textContent = dur(earlierThisWeek + todayNow());
+      };
+      const adopt = (next) => { st = next; readAt = Date.now(); asking = null; paintNow(); totals(); };
+      // The button says it is working, and gets its label back if the request
+      // fails, so the person can try again.
+      const busy = async (btn, label, work) => {
+        const was = btn.innerHTML;
+        btn.disabled = true; btn.textContent = label;
+        try { await work(); } catch (e) {
+          toast(e.message || 'That did not go through. Try again.', true);
+          if (btn.isConnected) { btn.disabled = false; btn.innerHTML = was; }
+        }
       };
 
-      bindRange('hi', run);
-      await run();
+      const paintNow = () => {
+        const box = $('mnow');
+        if (!box) return;
+        const out = st.checkedIn ? st.outForWork : null;
+        box.className = 'card now' + (out ? ' now--out' : st.checkedIn ? ' now--in' : '');
+        const line = out ? `${esc(out.reason)} · since ${hm(out.since)}`
+          : st.checkedIn ? `Since ${hm(st.since)}`
+          : 'You’re checked in when you arrive.';
+        let act = '';
+        if (out && asking === 'end') {
+          act = `<div class="acts"><span class="hint">End your day now?</span>
+            <button class="btn" id="mkeep" type="button">Not yet</button>
+            <button class="btn primary" id="mend" type="button">End day</button></div>`;
+        } else if (out) {
+          act = `<div class="acts"><button class="btn link" id="mdone" type="button">Done for the day</button>
+            <button class="btn primary" id="mback" type="button">I’m back</button></div>`;
+        } else if (st.checkedIn && asking === 'errand') {
+          act = `<div class="goout">
+              <div class="goout__q">Going out for</div>
+              <div class="reasons">${ERRANDS.map((r) => `<button class="reason" type="button" data-r="${esc(r)}">${esc(r)}</button>`).join('')}</div>
+              <input id="mwhy" maxlength="120" placeholder="Or type a reason" autocomplete="off" enterkeyhint="go">
+              <div class="acts"><button class="btn" id="mcancel" type="button">Cancel</button>
+                <button class="btn primary" id="mgo" type="button" disabled>Go out</button></div>
+            </div>`;
+        } else if (st.checkedIn) {
+          act = `<button class="btn block" id="merrand" type="button">${ic('briefcase')} Going out for work</button>`;
+        }
+        box.innerHTML = `<div class="now__row"><span class="now__dot"></span>
+            <span class="now__state">${out ? 'Out for work' : st.checkedIn ? 'At work' : 'Not at work'}</span></div>
+          <div class="now__line">${line}</div>${act ? `<div class="now__act">${act}</div>` : ''}`;
+
+        const on = (id, fn) => { const el = $(id); if (el) el.onclick = () => fn(el); };
+        on('merrand', () => { asking = 'errand'; paintNow(); });
+        on('mcancel', () => { asking = null; paintNow(); });
+        on('mdone', () => { asking = 'end'; paintNow(); });
+        on('mkeep', () => { asking = null; paintNow(); });
+        on('mback', (b) => busy(b, 'One moment…', async () => {
+          adopt(await api('/api/backFromWork', { method: 'POST' }));
+          toast('Welcome back');
+        }));
+        on('mend', (b) => busy(b, 'Ending…', async () => {
+          const next = await api('/api/checkOut', { method: 'POST', body: { source: 'banner', note: 'Done for the day' } });
+          if (next.checkedIn) throw new Error('Your day could not be ended. Try again.');
+          adopt(next);
+          toast('Your day is done');
+          list();
+        }));
+        const why = $('mwhy');
+        if (!why) return;
+        const go = $('mgo');
+        const sync = () => {
+          const v = why.value.trim();
+          go.disabled = !v;
+          box.querySelectorAll('.reason').forEach((c) => c.classList.toggle('on', c.dataset.r === v));
+        };
+        box.querySelectorAll('.reason').forEach((c) => { c.onclick = () => { why.value = c.dataset.r; sync(); }; });
+        why.oninput = sync;
+        why.onkeydown = (e) => { if (e.key === 'Enter' && !go.disabled) go.click(); };
+        go.onclick = () => busy(go, 'Going out…', async () => {
+          adopt(await api('/api/outForWork', { method: 'POST', body: { reason: why.value.trim() } }));
+          toast('Out for work — your time keeps counting');
+        });
+      };
+
+      const dayRow = (r) => {
+        const end = r.status === 'open' ? 'now' : r.lastOut ? hm(r.lastOut) : 'no check-out';
+        return `<button class="day" type="button" data-day="${esc(r.date)}" aria-expanded="false">
+            <span class="day__d">${esc(dayLabel(r.date))}</span>
+            <span class="day__m">${dur(r.totalMinutes)}</span>
+            <span class="day__t">${r.firstIn ? `${hm(r.firstIn)} – ${end}` : '—'}</span>
+          </button>
+          <div class="punches" id="mpd-${esc(r.date)}" hidden></div>`;
+      };
+      const punchRow = (e) => `<div class="punch"><span class="punch__t">${hm(e.at)}</span>
+        <span>${e.type === 'check_in' ? 'Arrived' : 'Left'}${e.note ? `<span class="punch__r">${esc(e.note)}</span>` : ''}</span></div>`;
+
+      const list = async () => {
+        const seq = ++MINE.seq;
+        const [from, to] = MINE_PERIODS[MINE.period][1]();
+        $('mp').querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.p === MINE.period));
+        $('mdates').hidden = MINE.period !== 'custom';
+        $('mrange').textContent = from === to ? dayLabel(from) : rangeLabel(from, to);
+        $('msum').textContent = '';
+        $('mdays').innerHTML = '<p class="hint pad">Loading…</p>';
+        try {
+          const data = await api('/api/getMyHistory?' + new URLSearchParams({ from, to }));
+          if (seq !== MINE.seq || !$('mdays')) return;
+          const rows = ((data && data.days) || []).filter((r) => Number(r.totalMinutes) > 0 || r.firstIn);
+          $('msum').textContent = rows.length ? dur(rows.reduce((a, r) => a + Number(r.totalMinutes || 0), 0)) : '';
+          $('mdays').innerHTML = rows.length ? rows.map(dayRow).join('') : '<p class="hint pad">No hours on these dates.</p>';
+          $('mdays').querySelectorAll('.day').forEach((el) => {
+            el.onclick = async () => {
+              const box = $('mpd-' + el.dataset.day);
+              box.hidden = !box.hidden;
+              el.setAttribute('aria-expanded', String(!box.hidden));
+              if (box.hidden || box.dataset.loaded) return;
+              box.innerHTML = '<p class="hint">Loading…</p>';
+              try {
+                const evs = await api('/api/getMyEvents?' + new URLSearchParams({ from: el.dataset.day, to: el.dataset.day }));
+                box.innerHTML = evs.length ? evs.slice().reverse().map(punchRow).join('') : '<p class="hint">Nothing recorded on this day.</p>';
+                box.dataset.loaded = '1';
+              } catch (e) {
+                box.innerHTML = `<p class="hint err">${esc(e.message)}</p>`;
+              }
+            };
+          });
+        } catch (e) {
+          if (seq === MINE.seq && $('mdays')) $('mdays').innerHTML = `<p class="hint err pad">${esc(e.message)}</p>`;
+        }
+      };
+
+      $('mp').querySelectorAll('button').forEach((b) => {
+        b.onclick = () => {
+          if (b.dataset.p === 'custom' && !MINE.from) [MINE.from, MINE.to] = MINE_PERIODS[MINE.period][1]();
+          MINE.period = b.dataset.p;
+          if (MINE.period === 'custom') { $('mfrom').value = MINE.from; $('mto').value = MINE.to; }
+          list();
+        };
+      });
+      const pick = () => {
+        const f = $('mfrom').value, t = $('mto').value;
+        if (!f || !t) return;
+        // A backwards range would read as "no hours", so swap it.
+        [MINE.from, MINE.to] = f <= t ? [f, t] : [t, f];
+        list();
+      };
+      $('mfrom').onchange = pick;
+      $('mto').onchange = pick;
+
+      // Back in the app after a while: the shift may have ended or an errand
+      // finished on arrival. Never while a reason is half typed.
+      MINE.refresh = async () => {
+        if (asking) return;
+        try { adopt(await api('/api/getMyStatus')); } catch (e) { toast(e.message, true); }
+      };
+      if (MINE.period === 'custom') { $('mfrom').value = MINE.from; $('mto').value = MINE.to; }
+      paintNow();
+      totals();
+      list();
+      clearInterval(ME_TICK);
+      ME_TICK = setInterval(() => {
+        if (TAB !== 'me' || !$('mtoday')) { clearInterval(ME_TICK); return; }
+        totals();
+      }, 30000);
     };
 
     // ==================== ADMIN ====================
@@ -825,79 +898,6 @@
     // path: everyone -> one person's days -> the punches behind a day.
 
     // ---- shared bits -------------------------------------------------------
-
-    // A date range remembered across sections, so moving between them doesn't
-    // silently change the period you were looking at.
-    // Defaults to THIS MONTH rather than a rolling 14 days. Payroll, overtime and
-    // "how many hours have I done" are all month-shaped questions; a window that
-    // straddles two months answers none of them without arithmetic.
-    const RANGE = (() => { const [from, to] = PERIODS.month.range(); return { from, to }; })();
-
-    const rangeBar = (id) => `
-      <div class="periods" id="${id}p">
-        ${Object.entries(PERIODS).map(([k, p]) =>
-          `<button data-p="${k}" type="button">${p.label}</button>`).join('')}
-      </div>
-      <div class="rangerow">
-        <span class="rangenote" id="${id}n"></span>
-        <button class="btn link small" data-p="custom" id="${id}pick" type="button">Pick dates</button>
-      </div>
-      <div class="toolbar" id="${id}custom" hidden>
-        <label class="field">From<input type="date" id="${id}f" value="${RANGE.from}"></label>
-        <label class="field">To<input type="date" id="${id}t" value="${RANGE.to}"></label>
-        <button class="btn" id="${id}go" style="align-self:flex-end">Apply</button>
-        <span class="count" id="${id}c"></span>
-      </div>`;
-
-    const bindRange = (id, onApply) => {
-      const chips = $(id + 'p');
-      const custom = $(id + 'custom');
-      const note = $(id + 'n');
-      const pick = $(id + 'pick');
-      const paint = () => {
-        const active = presetFor(RANGE.from, RANGE.to);
-        chips.querySelectorAll('button').forEach((b) =>
-          b.classList.toggle('active', b.dataset.p === active));
-        // Only the date inputs hide under a preset — never the segmented
-        // control, so there is always a one-tap way back out of a custom range.
-        custom.hidden = active !== 'custom';
-        pick.classList.toggle('active', active === 'custom');
-        note.textContent = RANGE.from === RANGE.to
-          ? dateNice(RANGE.from)
-          : `${dateNice(RANGE.from)} → ${dateNice(RANGE.to)}`;
-      };
-      // Repaint on EVERY change, not just at setup.
-      //
-      // This was the bug that made the whole control look dead: a tap set RANGE
-      // and refetched, but nothing called paint() again — so the highlight and
-      // the date line stayed on the period you had just left while the numbers
-      // underneath quietly changed. Tapping "Week" looked like tapping nothing.
-      const apply = () => { paint(); onApply(); };
-
-      chips.querySelectorAll('button').forEach((b) => {
-        b.onclick = () => {
-          [RANGE.from, RANGE.to] = PERIODS[b.dataset.p].range();
-          apply();
-        };
-      });
-      pick.onclick = () => {
-        custom.hidden = false;
-        chips.querySelectorAll('button').forEach((x) => x.classList.remove('active'));
-        pick.classList.add('active');
-        $(id + 'f').focus();
-      };
-      $(id + 'go').onclick = () => {
-        const f = $(id + 'f').value;
-        const t = $(id + 't').value;
-        if (!f || !t) return toast('Pick both dates', true);
-        // A backwards range returns nothing and looks like "no data" rather than
-        // like a mistake, so swap it instead of reporting an empty period.
-        RANGE.from = f <= t ? f : t;
-        RANGE.to = f <= t ? t : f;
-        apply();
-      };
-      paint();
-    };
 
     // Everyone enrolled, for the "pick a person" controls.
     const enrolled = async () => (await api('/api/admin/members')).filter((m) => m.attendanceRole);
