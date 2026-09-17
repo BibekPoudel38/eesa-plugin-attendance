@@ -717,11 +717,8 @@
     const VIEWS = {};
 
     // ==================== STAFF ====================
-    // One page: whether you are checked in, one button to check in or out that
-    // asks why, and your hours. The phone still checks people in and out as they
-    // arrive and leave; the button is for the times it cannot know.
-    const REASONS = { check_in: ['Work'], check_out: ['Going home', 'Outside work'] };
-    const VERB = { check_in: 'Check In', check_out: 'Check Out' };
+    // One page: whether the phone has you checked in, and your hours. Nobody
+    // checks in or out by hand; the phone does it as people arrive and leave.
     const CHEV = '<svg class="chev" viewBox="0 0 8 13" aria-hidden="true"><path d="M1.5 1.5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     // "9:02 AM" on the restaurant's clock, in the phone's own format.
     const hm = (iso) => iso
@@ -830,46 +827,6 @@
         }
       };
 
-      const punch = async (type, reason, sheet) => {
-        const next = await api(type === 'check_in' ? '/api/checkIn' : '/api/checkOut',
-          { method: 'POST', body: { source: 'banner', note: reason } });
-        if (next.checkedIn !== (type === 'check_in')) {
-          throw new Error(`You could not be checked ${type === 'check_in' ? 'in' : 'out'}. Try again.`);
-        }
-        sheet.close();
-        adopt(next);
-        list();
-      };
-
-      // One question, answered with one tap.
-      const askWhy = (type) => {
-        const s = openSheet(`
-          <div class="iaction" role="alertdialog" aria-modal="true" aria-labelledby="wt">
-            <div class="ig"><div class="msg" id="wt">Why are you checking ${type === 'check_in' ? 'in' : 'out'}?</div>
-              ${REASONS[type].map((r) => `<button type="button" data-r="${esc(r)}">${esc(r)}</button>`).join('')}
-              <button type="button" data-other>Other…</button></div>
-            <div class="ig"><button type="button" class="strong" data-x data-autofocus>Cancel</button></div>
-          </div>`);
-        s.el.querySelector('[data-x]').onclick = s.close;
-        s.el.querySelectorAll('[data-r]').forEach((b) => { b.onclick = () => busy(b, () => punch(type, b.dataset.r, s)); });
-        s.el.querySelector('[data-other]').onclick = () => { s.close(); askOther(type); };
-      };
-
-      const askOther = (type) => {
-        const s = openSheet(`
-          <div class="ialert" role="alertdialog" aria-modal="true" aria-labelledby="ot">
-            <div class="ialert__body"><h3 id="ot">${VERB[type]}</h3><p>What’s the reason?</p>
-              <input id="oreason" maxlength="120" placeholder="Reason" autocomplete="off" enterkeyhint="done" data-autofocus></div>
-            <div class="ialert__acts"><button type="button" data-x>Cancel</button><button type="button" data-ok disabled>${VERB[type]}</button></div>
-          </div>`, { center: true });
-        const input = s.el.querySelector('#oreason');
-        const ok = s.el.querySelector('[data-ok]');
-        input.oninput = () => { ok.disabled = !input.value.trim(); };
-        input.onkeydown = (e) => { if (e.key === 'Enter' && !ok.disabled) ok.click(); };
-        s.el.querySelector('[data-x]').onclick = s.close;
-        ok.onclick = () => busy(ok, () => punch(type, input.value.trim(), s));
-      };
-
       const paintNow = () => {
         const box = $('mnow');
         if (!box) return;
@@ -879,12 +836,10 @@
         const out = last('check_out');
         const [state, sub] = st.checkedIn ? ['Checked in', `Since ${hm(st.since)}${why(last('check_in'))}`]
           : out ? ['Checked out', `${hm(out.at)}${why(out)}`]
-          : ['Not checked in', ''];
+          : ['Not checked in', 'You’re checked in automatically when you arrive.'];
         box.innerHTML = `
           <div class="cell"><span class="dot${st.checkedIn ? ' dot--in' : ''}"></span>
-            <span class="cell__main"><span class="cell__title state">${state}</span>${sub ? `<span class="cell__sub">${sub}</span>` : ''}</span></div>
-          <button class="cell cell--action" type="button" id="mpunch">${st.checkedIn ? VERB.check_out : VERB.check_in}</button>`;
-        $('mpunch').onclick = () => askWhy(st.checkedIn ? 'check_out' : 'check_in');
+            <span class="cell__main"><span class="cell__title state">${state}</span><span class="cell__sub">${sub}</span></span></div>`;
       };
 
       const dayRow = (r) => {
