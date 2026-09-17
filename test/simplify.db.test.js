@@ -42,7 +42,7 @@ describe('simplified attendance on a real database', { skip }, () => {
   before(async () => {
     db = await import('../src/db.js');
     await db.ensureSimplifyTables();
-    for (const t of ['events', 'day_summaries', 'zones', 'tenant_settings', 'presence_signals', 'day_corrections', 'sent_summaries', 'work_outings']) {
+    for (const t of ['events', 'day_summaries', 'zones', 'tenant_settings', 'presence_signals', 'day_corrections', 'sent_summaries']) {
       await db.pool.query(`delete from ${t} where tenant_id = $1`, [T]);
     }
     await db.setTenantTimezone(T, TZ);
@@ -215,55 +215,21 @@ describe('simplified attendance on a real database', { skip }, () => {
     assert.deepEqual((await db.getTenantSettings(T)).workingHours, { start: '06:30', end: '23:00' });
   });
 
-  test('out for work: an errand needs a reason and a running shift', async () => {
-    assert.equal((await db.startOuting(T, '48', 'Buying groceries')).code, 'NOT_AT_WORK');
-    await punch('48', 'check_in', zoned(D3, '09:00'));
-    assert.equal((await db.startOuting(T, '48', '   ')).code, 'REASON_REQUIRED');
-    assert.equal((await db.startOuting(T, '48', 'Buying groceries')).ok, true);
-    assert.equal((await db.startOuting(T, '48', 'Meeting a customer')).code, 'ALREADY_OUT');
-    await db.endOuting(T, '48', 'back');
-    assert.equal(await db.openOuting(T, '48'), null);
+  test('checked in by tapping, with a reason and no zone, the phone leaving still ends the shift', async () => {
+    await db.recordEvent(T, '52', 'check_in', { zoneId: null, source: 'banner', note: 'Work', at: zoned(D3, '09:00') });
+    const left = await punch('52', 'check_out', zoned(D3, '13:00'), { lat: C.lat + 0.003 });
+    assert.equal(left.duplicate, undefined, 'recorded, not ignored as another zone');
+    assert.equal((await dayRow('52', D3)).totalMinutes, 240);
+    const log = await db.myEvents(T, '52', { from: D3, to: D3 });
+    assert.equal(log.find((e) => e.type === 'check_in').note, 'Work');
   });
 
-  test('out for work: walking out keeps the shift running, and coming back ends the errand', async () => {
-    await punch('49', 'check_in', zoned(D2, '09:00'));
-    await db.pool.query(
-      `insert into work_outings (tenant_id, employee_ref, reason, started_at) values ($1, '49', 'Meeting a customer', $2)`,
-      [T, zoned(D2, '11:00')],
-    );
-    const left = await punch('49', 'check_out', zoned(D2, '11:02'), { lat: C.lat + 0.01 });
-    assert.equal(left.ignored, 'out_for_work');
-    assert.notEqual(await db.openOuting(T, '49'), null);
-
-    await punch('49', 'check_in', zoned(D2, '12:30'));          // back at the zone
-    assert.equal(await db.openOuting(T, '49'), null);
-    await punch('49', 'check_out', zoned(D2, '17:00'), { lat: C.lat + 0.003 });
-    const row = await dayRow('49', D2);
-    assert.equal(row.totalMinutes, 480);                         // the errand was paid
-    await settle();
-    const sig = await db.pool.query(`select reason from presence_signals where tenant_id = $1 and employee_ref = '49'`, [T]);
-    // The exit, kept as the errand; the return, kept as a repeat arrival.
-    assert.deepEqual(sig.rows.map((r) => r.reason).sort(), ['already_in_that_state', 'out_for_work']);
-  });
-
-  test('out for work: the status says so while it is happening', async () => {
-    await punch('51', 'check_in', new Date(Date.now() - 60 * 60e3).toISOString());
-    assert.equal((await db.startOuting(T, '51', 'Meeting a customer')).ok, true);
-    await punch('51', 'check_out', new Date().toISOString(), { lat: C.lat + 0.01 });
-    const status = await db.myStatus(T, '51');
-    assert.equal(status.checkedIn, true);
-    assert.equal(status.outForWork?.reason, 'Meeting a customer');
-    assert.ok(status.outForWork?.since);
-  });
-
-  test("out for work: iOS re-noticing the zone right away doesn't end the errand; done for the day does", async () => {
-    await punch('50', 'check_in', zoned(D3, '09:00'));
-    const started = await db.startOuting(T, '50', 'Buying groceries');
-    assert.equal(started.ok, true);
-    await punch('50', 'check_in', new Date().toISOString());     // a same-minute re-enter
-    assert.notEqual(await db.openOuting(T, '50'), null);
-    await db.recordEvent(T, '50', 'check_out', { zoneId: null, source: 'banner', note: 'Done for the day' });
-    assert.equal(await db.openOuting(T, '50'), null);
+  test('checked out by tapping with a reason, the time stops there', async () => {
+    await punch('53', 'check_in', zoned(D3, '09:00'));
+    await db.recordEvent(T, '53', 'check_out', { zoneId: null, source: 'banner', note: 'Outside work', at: zoned(D3, '11:00') });
+    const exit = await punch('53', 'check_out', zoned(D3, '11:05'), { lat: C.lat + 0.003 });
+    assert.equal(exit.duplicate, true, 'already out');
+    assert.equal((await dayRow('53', D3)).totalMinutes, 120);
   });
 
   test('a summary is sent once, however many times it is claimed', async () => {

@@ -446,20 +446,8 @@ export async function ensureSimplifyTables() {
       sent_at timestamptz not null default now(),
       primary key (tenant_id, kind, period_key)
     )`);
-    // Why somebody checked out or back in by hand ("Left my keys at home").
+    // Why somebody checked in or out by hand: Work, Going home, Outside work.
     await pool.query(`alter table events add column if not exists note text`);
-    // Out for work: an errand away from the zone that keeps the shift running.
-    await pool.query(`create table if not exists work_outings (
-      id uuid primary key default gen_random_uuid(),
-      tenant_id text not null,
-      employee_ref text not null,
-      reason text not null,
-      started_at timestamptz not null default now(),
-      ended_at timestamptz,
-      ended_how text
-    )`);
-    await pool.query(`create index if not exists work_outings_open
-      on work_outings (tenant_id, employee_ref) where ended_at is null`);
     // When the workspace is working, on its own clock.
     await pool.query(`alter table tenant_settings add column if not exists work_start time`);
     await pool.query(`alter table tenant_settings add column if not exists work_end time`);
@@ -611,13 +599,6 @@ export async function recordEvent(
   // claim a perfect fix and remove all the slack the verification allows.
   const rawAcc = num(accuracyM);
   const acc = rawAcc != null && rawAcc >= 0 ? Math.min(rawAcc, 100000) : null;
-  // Back from a work errand: arriving ends it — but not an arrival in the first
-  // minutes, which is iOS re-noticing the zone the person is still standing in.
-  if (type === 'check_in') {
-    await endOuting(tenantId, employeeRef, 'arrived', {
-      startedBefore: new Date((Number.isFinite(happenedAt) ? happenedAt : Date.now()) - OUTING_SETTLE_MS),
-    });
-  }
   if (isNoOpPunch(last, type, { zoneId: zid, forWork },
                   Number.isFinite(happenedAt) ? happenedAt : Date.now())) {
     // Nothing changes on the record — but a phone that says "left the zone"
@@ -632,17 +613,6 @@ export async function recordEvent(
       });
     }
     return { id: null, type, at: iso(last && last.at), duplicate: true };
-  }
-  // Out for work: the phone leaving the zone is the errand, not the end of the
-  // shift. Kept as evidence; the time keeps counting.
-  if (type === 'check_out' && PHONE_OBSERVED.has(String(source || 'geofence'))
-      && last && last.type === 'check_in' && (await openOuting(tenantId, employeeRef))) {
-    notePresenceSignal(tenantId, employeeRef, {
-      type, zoneId: zid, lat: la, lng: ln, accuracyM: acc, source,
-      reason: 'out_for_work',
-      at: Number.isFinite(happenedAt) ? new Date(happenedAt).toISOString() : null,
-    });
-    return { id: null, type, at: iso(last.at), duplicate: true, ignored: 'out_for_work' };
   }
   if (exitFromAnotherZone(last, type, { zoneId: zid, source })) {
     notePresenceSignal(tenantId, employeeRef, {
@@ -691,8 +661,6 @@ export async function recordEvent(
          String(source || 'geofence'), workType ? String(workType).slice(0, 120) : null,
          at, why],
       );
-  // A shift ended by hand ends any errand with it ("Done for the day").
-  if (type === 'check_out') await endOuting(tenantId, employeeRef, 'checked_out');
   await upsertDaySummary(tenantId, employeeRef, await shiftDayOfEvent(tenantId, employeeRef, rows[0].id, rows[0].at));
   // Gated on hasConfirm, not just on the request. If the DDL never landed (no
   // grant on this database) the punch was inserted WITHOUT confirm_status, so
@@ -891,59 +859,11 @@ export function computeToday(
   };
 }
 
-/// Out for work — someone leaves on a work errand (buying groceries, meeting a
-/// customer) and their time keeps counting. Without it, walking out of the zone
-/// ended the shift and the errand went unpaid.
-const OUTING_SETTLE_MS = 5 * 60 * 1000;
-
-export async function openOuting(tenantId, employeeRef) {
-  await ensureSimplifyTables();
-  const rows = await q(
-    `select id, reason, started_at from work_outings
-      where tenant_id = $1 and employee_ref = $2 and ended_at is null
-      order by started_at desc limit 1`,
-    [tenantId, employeeRef],
-  );
-  return rows[0] || null;
-}
-
-export async function startOuting(tenantId, employeeRef, reason) {
-  const why = String(reason || '').trim().slice(0, 120);
-  if (!why) return { ok: false, code: 'REASON_REQUIRED', message: 'Say what the errand is.' };
-  const last = await lastEvent(tenantId, employeeRef);
-  if (!last || last.type !== 'check_in') {
-    return { ok: false, code: 'NOT_AT_WORK', message: "You're not checked in, so there is no shift to keep running." };
-  }
-  if (await openOuting(tenantId, employeeRef)) {
-    return { ok: false, code: 'ALREADY_OUT', message: "You're already out for work." };
-  }
-  const rows = await q(
-    `insert into work_outings (tenant_id, employee_ref, reason) values ($1, $2, $3)
-     returning id, reason, started_at`,
-    [tenantId, employeeRef, why],
-  );
-  return { ok: true, outing: rows[0] };
-}
-
-/// Ends the open errand, if any. [startedBefore] leaves a just-started one alone.
-export async function endOuting(tenantId, employeeRef, how, { startedBefore = null } = {}) {
-  await ensureSimplifyTables();
-  const rows = await q(
-    `update work_outings set ended_at = now(), ended_how = $3
-      where tenant_id = $1 and employee_ref = $2 and ended_at is null
-        and ($4::timestamptz is null or started_at < $4)
-      returning id`,
-    [tenantId, employeeRef, how, startedBefore],
-  );
-  return rows.length > 0;
-}
-
 export async function myStatus(tenantId, employeeRef) {
   const tz = await tenantTz(tenantId);
   const day = await currentShiftDay(tenantId, employeeRef, tz);
   const rows = await shiftEvents(tenantId, employeeRef, day);
   const t = computeToday(rows);
-  const outing = await openOuting(tenantId, employeeRef);
   const events = rows.map(eventOut).reverse();       // newest first, for display
   const dayV = dayVerification(events);
   const open = t.openEvent ? eventOut(t.openEvent) : null;
@@ -978,8 +898,6 @@ export async function myStatus(tenantId, employeeRef) {
     verification: open ? open.verification : dayV.verification,
     verificationReason: open ? open.verificationReason : null,
     currentPunch: open,
-    // On a work errand right now: the shift is running while they are away.
-    outForWork: t.checkedIn && outing ? { reason: outing.reason, since: iso(outing.started_at) } : null,
     // Today's punches in full — the phone's detail sheet renders straight from
     // this, so opening it costs nothing extra.
     events,

@@ -344,21 +344,21 @@
       --ios-bg:#F2F2F7; --ios-cell:#FFFFFF; --ios-press:#D1D1D6; --ios-sep:rgba(60,60,67,.29);
       --ios-label:#000000; --ios-2:rgba(60,60,67,.6); --ios-3:rgba(60,60,67,.3);
       --ios-fill:rgba(118,118,128,.12); --ios-seg:#FFFFFF; --ios-scrim:rgba(0,0,0,.4);
-      --ios-green:#34C759; --ios-orange:#FF9500; --ios-red:#FF3B30;
+      --ios-green:#34C759; --ios-red:#FF3B30; --ios-alert:#F2F2F2;
     }
     @media (prefers-color-scheme: dark) {
       :root:not([data-theme="light"]) {
         --ios-bg:#000000; --ios-cell:#1C1C1E; --ios-press:#3A3A3C; --ios-sep:rgba(84,84,88,.65);
         --ios-label:#FFFFFF; --ios-2:rgba(235,235,245,.6); --ios-3:rgba(235,235,245,.3);
         --ios-fill:rgba(118,118,128,.24); --ios-seg:#636366; --ios-scrim:rgba(0,0,0,.6);
-        --ios-green:#30D158; --ios-orange:#FF9F0A; --ios-red:#FF453A;
+        --ios-green:#30D158; --ios-red:#FF453A; --ios-alert:#2C2C2E;
       }
     }
     :root[data-theme="dark"] {
       --ios-bg:#000000; --ios-cell:#1C1C1E; --ios-press:#3A3A3C; --ios-sep:rgba(84,84,88,.65);
       --ios-label:#FFFFFF; --ios-2:rgba(235,235,245,.6); --ios-3:rgba(235,235,245,.3);
       --ios-fill:rgba(118,118,128,.24); --ios-seg:#636366; --ios-scrim:rgba(0,0,0,.6);
-      --ios-green:#30D158; --ios-orange:#FF9F0A; --ios-red:#FF453A;
+      --ios-green:#30D158; --ios-red:#FF453A; --ios-alert:#2C2C2E;
     }
     body.staff {
       background:var(--ios-bg); color:var(--ios-label);
@@ -392,7 +392,6 @@
     .state { font-weight:600; }
     .dot { width:10px; height:10px; border-radius:50%; flex:none; background:var(--ios-3); }
     .dot--in { background:var(--ios-green); }
-    .dot--out { background:var(--ios-orange); }
     .sum { display:grid; grid-template-columns:repeat(3, 1fr); }
     .sum > div { position:relative; padding:10px 12px 12px; }
     .sum > div + div::before { content:''; position:absolute; left:0; top:12px; bottom:12px; width:.5px; background:var(--ios-sep); }
@@ -407,7 +406,6 @@
     .seg button:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
     .ihead { display:flex; justify-content:space-between; gap:8px; padding:0 16px 7px; font-size:13px; letter-spacing:-.08px; color:var(--ios-2); }
     .ihead span:first-child { text-transform:uppercase; }
-    .ifoot { margin:-15px 0 22px; padding:0 16px; font-size:13px; letter-spacing:-.08px; color:var(--ios-2); }
     body.staff .cell input {
       font:inherit; font-size:17px; color:var(--ios-label); background:none; border:0; border-radius:0;
       padding:0; width:100%; box-shadow:none;
@@ -416,32 +414,34 @@
       -webkit-appearance:none; appearance:none; width:auto; min-width:0; background:var(--ios-fill);
       border-radius:6px; padding:6px 11px; font-variant-numeric:tabular-nums;
     }
-    /* Sheets: a page sheet for a choice, an action sheet for a yes or no. */
-    .iback { position:fixed; inset:0; z-index:60; display:flex; align-items:flex-end; justify-content:center; background:var(--ios-scrim); animation:ifade .2s ease; }
-    .isheet {
-      width:100%; max-width:560px; max-height:92vh; overflow:auto; background:var(--ios-bg);
-      border-radius:12px 12px 0 0; padding:6px 16px calc(24px + env(safe-area-inset-bottom, 0px));
-      animation:iup .3s cubic-bezier(.2,.8,.2,1);
+    /* An action sheet for the question, and an alert when a reason is typed. */
+    .iback--center { align-items:center; padding:0 16px; }
+    .ialert { width:270px; max-width:100%; overflow:hidden; text-align:center; border-radius:14px; background:var(--ios-alert); animation:ipop .2s ease-out; }
+    .ialert__body { padding:19px 16px 16px; }
+    .ialert h3 { margin:0; font-size:17px; font-weight:600; }
+    .ialert p { margin:2px 0 0; font-size:13px; letter-spacing:-.08px; }
+    body.staff .ialert input {
+      width:100%; margin-top:14px; padding:7px 8px; font:inherit; font-size:13px; color:var(--ios-label);
+      background:var(--ios-cell); border:.5px solid var(--ios-sep); border-radius:6px; box-shadow:none;
     }
-    .grab { width:36px; height:5px; border-radius:3px; margin:0 auto 4px; background:var(--ios-3); }
-    .inav { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; min-height:44px; margin:0 0 12px; }
-    .inav h3 { margin:0; font-size:17px; font-weight:600; }
-    .inav button { justify-self:start; font:inherit; font-size:17px; color:var(--primary); background:none; border:0; padding:8px 0; cursor:pointer; }
-    .inav button:last-child { justify-self:end; font-weight:600; }
-    .inav button:disabled { color:var(--ios-3); cursor:default; }
-    .check { width:17px; height:17px; flex:none; color:var(--primary); visibility:hidden; }
-    [aria-checked="true"] > .check { visibility:visible; }
+    body.staff .ialert input:focus { outline:none; box-shadow:none; border-color:var(--ios-sep); }
+    .ialert__acts { display:grid; grid-template-columns:1fr 1fr; border-top:.5px solid var(--ios-sep); }
+    .ialert__acts button { min-height:44px; font:inherit; font-size:17px; color:var(--primary); background:none; border:0; cursor:pointer; }
+    .ialert__acts button + button { border-left:.5px solid var(--ios-sep); font-weight:600; }
+    .ialert__acts button:active { background:var(--ios-press); }
+    .ialert__acts button:disabled { color:var(--ios-3); cursor:default; }
     .iaction { width:100%; max-width:560px; padding:0 8px calc(8px + env(safe-area-inset-bottom, 0px)); animation:iup .3s cubic-bezier(.2,.8,.2,1); }
     .iaction .ig { margin:0 0 8px; border-radius:14px; }
     .iaction .msg { padding:14px 16px; text-align:center; font-size:13px; letter-spacing:-.08px; color:var(--ios-2); }
     .iaction button { position:relative; display:block; width:100%; min-height:57px; font:inherit; font-size:20px; color:var(--primary); background:none; border:0; cursor:pointer; }
-    .iaction .msg + button::before { content:''; position:absolute; top:0; left:0; right:0; height:.5px; background:var(--ios-sep); }
+    .iaction .ig > * + button::before { content:''; position:absolute; top:0; left:0; right:0; height:.5px; background:var(--ios-sep); }
     .iaction button:active { background:var(--ios-press); }
     .iaction .danger { color:var(--ios-red); }
     .iaction .strong { font-weight:600; }
     @keyframes iup { from { transform:translateY(100%); } to { transform:none; } }
     @keyframes ifade { from { opacity:0; } to { opacity:1; } }
-    @media (prefers-reduced-motion: reduce) { .iback, .isheet, .iaction { animation:none; } .chev { transition:none; } }
+    @keyframes ipop { from { opacity:0; transform:scale(1.1); } to { opacity:1; transform:none; } }
+    @media (prefers-reduced-motion: reduce) { .iback, .iaction, .ialert { animation:none; } .chev { transition:none; } }
     .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
     .toolbar input[type="search"], .toolbar input.search { flex:1; min-width:180px; }
     .toolbar select { width:auto; min-width:120px; }
@@ -716,14 +716,12 @@
     const VIEWS = {};
 
     // ==================== STAFF ====================
-    // One page, in the order the questions come: am I at work, I'm going out on
-    // an errand, and how many hours have I done. Arriving and leaving record
-    // themselves, so nothing here starts a shift. The one way to end one is
-    // "Done for the Day" while out on an errand, when no phone is at work to see
-    // the person leave.
-    const ERRANDS = ['Buying groceries', 'Meeting a customer', 'Delivery', 'Bank'];
+    // One page: whether you are checked in, one button to check in or out that
+    // asks why, and your hours. The phone still checks people in and out as they
+    // arrive and leave; the button is for the times it cannot know.
+    const REASONS = { check_in: ['Work'], check_out: ['Going home', 'Outside work'] };
+    const VERB = { check_in: 'Check In', check_out: 'Check Out' };
     const CHEV = '<svg class="chev" viewBox="0 0 8 13" aria-hidden="true"><path d="M1.5 1.5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-    const CHECK = '<svg class="check" viewBox="0 0 17 17" aria-hidden="true"><path d="M2.5 9l4 4 8-9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     // "9:02 AM" on the restaurant's clock, in the phone's own format.
     const hm = (iso) => iso
       ? new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', ...(TZ ? { timeZone: TZ } : {}) })
@@ -750,12 +748,12 @@
       if (!document.hidden && TAB === 'me' && MINE.refresh) MINE.refresh();
     });
 
-    // A sheet over the page, the way iOS asks: Escape or a tap outside closes
-    // it, the page behind stays put, and focus goes back where it came from.
-    function openSheet(html) {
+    // Over the page, the way iOS asks: Escape or a tap outside closes it, the
+    // page behind stays put, and focus goes back where it came from.
+    function openSheet(html, { center = false } = {}) {
       const opener = document.activeElement;
       const back = document.createElement('div');
-      back.className = 'iback';
+      back.className = center ? 'iback iback--center' : 'iback';
       back.innerHTML = html;
       document.body.appendChild(back);
       document.body.style.overflow = 'hidden';
@@ -831,70 +829,61 @@
         }
       };
 
-      const goOut = () => {
-        let reason = '';
-        const s = openSheet(`
-          <div class="isheet" role="dialog" aria-modal="true" aria-labelledby="gt">
-            <div class="grab"></div>
-            <div class="inav"><button type="button" id="gx" data-autofocus>Cancel</button><h3 id="gt">Going Out for Work</h3><button type="button" id="gok" disabled>Go</button></div>
-            <div class="ig" role="radiogroup" aria-labelledby="gt">
-              ${ERRANDS.map((r) => `<button class="cell" type="button" role="radio" aria-checked="false" data-r="${esc(r)}"><span class="cell__main">${esc(r)}</span>${CHECK}</button>`).join('')}
-              <label class="cell"><input id="gother" maxlength="120" placeholder="Other reason" autocomplete="off" enterkeyhint="go"></label>
-            </div>
-            <p class="ifoot">Your hours keep counting while you’re out.</p>
-          </div>`);
-        const ok = s.el.querySelector('#gok');
-        const other = s.el.querySelector('#gother');
-        const choose = (r) => {
-          reason = r.trim();
-          s.el.querySelectorAll('[role=radio]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.r === r)));
-          ok.disabled = !reason;
-        };
-        s.el.querySelectorAll('[role=radio]').forEach((b) => { b.onclick = () => { other.value = ''; choose(b.dataset.r); }; });
-        other.oninput = () => choose(other.value);
-        other.onkeydown = (e) => { if (e.key === 'Enter' && !ok.disabled) ok.click(); };
-        s.el.querySelector('#gx').onclick = s.close;
-        ok.onclick = () => busy(ok, async () => {
-          const next = await api('/api/outForWork', { method: 'POST', body: { reason } });
-          s.close();
-          adopt(next);
-        });
+      const punch = async (type, reason, sheet) => {
+        const next = await api(type === 'check_in' ? '/api/checkIn' : '/api/checkOut',
+          { method: 'POST', body: { source: 'banner', note: reason } });
+        if (next.checkedIn !== (type === 'check_in')) {
+          throw new Error(`You could not be checked ${type === 'check_in' ? 'in' : 'out'}. Try again.`);
+        }
+        sheet.close();
+        adopt(next);
+        list();
       };
 
-      const endDay = () => {
+      // One question, answered with one tap.
+      const askWhy = (type) => {
         const s = openSheet(`
-          <div class="iaction" role="alertdialog" aria-modal="true" aria-labelledby="et">
-            <div class="ig"><div class="msg" id="et">End your day now? Your hours stop at ${hm(new Date().toISOString())}.</div>
-              <button type="button" class="danger" id="eok">End Day</button></div>
-            <div class="ig"><button type="button" class="strong" id="ex" data-autofocus>Cancel</button></div>
+          <div class="iaction" role="alertdialog" aria-modal="true" aria-labelledby="wt">
+            <div class="ig"><div class="msg" id="wt">Why are you checking ${type === 'check_in' ? 'in' : 'out'}?</div>
+              ${REASONS[type].map((r) => `<button type="button" data-r="${esc(r)}">${esc(r)}</button>`).join('')}
+              <button type="button" data-other>Other…</button></div>
+            <div class="ig"><button type="button" class="strong" data-x data-autofocus>Cancel</button></div>
           </div>`);
-        s.el.querySelector('#ex').onclick = s.close;
-        const ok = s.el.querySelector('#eok');
-        ok.onclick = () => busy(ok, async () => {
-          const next = await api('/api/checkOut', { method: 'POST', body: { source: 'banner', note: 'Done for the day' } });
-          if (next.checkedIn) throw new Error('Your day could not be ended. Try again.');
-          s.close();
-          adopt(next);
-          list();
-        });
+        s.el.querySelector('[data-x]').onclick = s.close;
+        s.el.querySelectorAll('[data-r]').forEach((b) => { b.onclick = () => busy(b, () => punch(type, b.dataset.r, s)); });
+        s.el.querySelector('[data-other]').onclick = () => { s.close(); askOther(type); };
+      };
+
+      const askOther = (type) => {
+        const s = openSheet(`
+          <div class="ialert" role="alertdialog" aria-modal="true" aria-labelledby="ot">
+            <div class="ialert__body"><h3 id="ot">${VERB[type]}</h3><p>What’s the reason?</p>
+              <input id="oreason" maxlength="120" placeholder="Reason" autocomplete="off" enterkeyhint="done" data-autofocus></div>
+            <div class="ialert__acts"><button type="button" data-x>Cancel</button><button type="button" data-ok disabled>${VERB[type]}</button></div>
+          </div>`, { center: true });
+        const input = s.el.querySelector('#oreason');
+        const ok = s.el.querySelector('[data-ok]');
+        input.oninput = () => { ok.disabled = !input.value.trim(); };
+        input.onkeydown = (e) => { if (e.key === 'Enter' && !ok.disabled) ok.click(); };
+        s.el.querySelector('[data-x]').onclick = s.close;
+        ok.onclick = () => busy(ok, () => punch(type, input.value.trim(), s));
       };
 
       const paintNow = () => {
         const box = $('mnow');
         if (!box) return;
-        const out = st.checkedIn ? st.outForWork : null;
-        const row = (id, label) => `<button class="cell cell--action" type="button" id="${id}">${label}</button>`;
+        // Today's punches come newest first.
+        const last = (type) => (st.events || []).find((e) => e.type === type);
+        const why = (e) => (e && e.note ? ` · ${esc(e.note)}` : '');
+        const out = last('check_out');
+        const [state, sub] = st.checkedIn ? ['Checked in', `Since ${hm(st.since)}${why(last('check_in'))}`]
+          : out ? ['Checked out', `${hm(out.at)}${why(out)}`]
+          : ['Not checked in', ''];
         box.innerHTML = `
-          <div class="cell"><span class="dot${out ? ' dot--out' : st.checkedIn ? ' dot--in' : ''}"></span>
-            <span class="cell__main"><span class="cell__title state">${out ? 'Out for work' : st.checkedIn ? 'At work' : 'Not at work'}</span>
-              <span class="cell__sub">${out ? `${esc(out.reason)} · since ${hm(out.since)}`
-                : st.checkedIn ? `Since ${hm(st.since)}` : 'You’ll be checked in when you arrive.'}</span></span></div>
-          ${out ? row('mback', 'I’m Back') + row('mdone', 'Done for the Day')
-            : st.checkedIn ? row('merrand', 'Going Out for Work') : ''}`;
-        const on = (id, fn) => { const el = $(id); if (el) el.onclick = () => fn(el); };
-        on('merrand', goOut);
-        on('mdone', endDay);
-        on('mback', (b) => busy(b, async () => adopt(await api('/api/backFromWork', { method: 'POST' }))));
+          <div class="cell"><span class="dot${st.checkedIn ? ' dot--in' : ''}"></span>
+            <span class="cell__main"><span class="cell__title state">${state}</span>${sub ? `<span class="cell__sub">${sub}</span>` : ''}</span></div>
+          <button class="cell cell--action" type="button" id="mpunch">${st.checkedIn ? VERB.check_out : VERB.check_in}</button>`;
+        $('mpunch').onclick = () => askWhy(st.checkedIn ? 'check_out' : 'check_in');
       };
 
       const dayRow = (r) => {
@@ -907,7 +896,7 @@
           <div class="punches" id="mpd-${esc(r.date)}" hidden></div>`;
       };
       const punchRow = (e) => `<div class="cell"><span class="cell__main">
-          <span class="cell__title">${e.type === 'check_in' ? 'Arrived' : 'Left'}</span>
+          <span class="cell__title">${e.type === 'check_in' ? 'Checked in' : 'Checked out'}</span>
           ${e.note ? `<span class="cell__sub">${esc(e.note)}</span>` : ''}</span>
         <span class="cell__detail">${hm(e.at)}</span></div>`;
       const note = (text, cls = '') => `<div class="cell"><span class="cell__sub ${cls}">${esc(text)}</span></div>`;
@@ -972,8 +961,8 @@
       $('mto').onchange = pick;
       if (MINE.from) { $('mfrom').value = MINE.from; $('mto').value = MINE.to; }
 
-      // Back in the app after a while: the shift may have ended, or an errand
-      // finished on arrival. Not while a sheet is asking something.
+      // Back in the app after a while: the phone may have checked them in or out.
+      // Not while something is being asked.
       MINE.refresh = async () => {
         if (document.querySelector('.iback')) return;
         try { adopt(await api('/api/getMyStatus')); } catch (e) { toast(e.message, true); }
