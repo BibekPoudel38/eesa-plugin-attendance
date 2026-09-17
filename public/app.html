@@ -583,6 +583,8 @@
       const i = at >= 0 ? at : [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
       return ZONE_COLOURS[i % ZONE_COLOURS.length];
     };
+    // On site but not working: they said this visit was not for work.
+    const onlyOnSite = (r) => !r.checkedIn && String(r.reason || '').trim().toLowerCase() === 'not for work';
     const zoneMark = (name) => (name
       ? `<span class="zmark"><i style="background:${zoneColour(name)}"></i>${esc(name)}</span>`
       : '');
@@ -1147,7 +1149,9 @@
             ? `<div class="tablewrap"><table><thead><tr><th>Name</th><th></th><th>Since</th><th>Where</th></tr></thead><tbody>
               ${list.map((r) => `<tr>
                 <td><div style="font-weight:600">${esc(r.name || r.employeeRef)}</div></td>
-                <td>${r.checkedIn ? '<span class="pill complete">At work</span>' : '<span class="pill">Out</span>'}${r.reason ? ` <span class="muted" style="font-size:.78rem">${esc(r.reason)}</span>` : ''}</td>
+                <td>${r.checkedIn ? '<span class="pill complete">At work</span>'
+                  : onlyOnSite(r) ? '<span class="pill">On site</span>'
+                  : '<span class="pill">Out</span>'}${r.reason ? ` <span class="muted" style="font-size:.78rem">${esc(r.reason)}</span>` : ''}</td>
                 <td class="num">${timeOf(r.at)}</td>
                 <td>${whereText(r.lastLocation)}</td>
               </tr>`).join('')}</tbody></table></div>`

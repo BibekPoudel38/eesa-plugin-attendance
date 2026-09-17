@@ -1210,7 +1210,9 @@ export async function presence(tenantId) {
       return {
         employeeRef: r.employee_ref,
         name: r.name || '',
-        checkedIn: r.type === 'check_in',
+        // On the clock — not merely on site. Somebody whose last check-in says
+        // "Not for work" is here but not working, and their hours say so too.
+        checkedIn: r.type === 'check_in' && !isReason(r.reason, REASON.notForWork),
         at: iso(r.at),
         // Why they came in or went out, if they said.
         reason: r.reason || null,

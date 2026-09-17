@@ -240,6 +240,18 @@ describe('simplified attendance on a real database', { skip }, () => {
     assert.equal(await db.setMyReason(T, '58', old.id, 'Work'), false, 'too long ago to change');
   });
 
+  test('somebody who says "Not for work" is on site but not counted as at work', async () => {
+    const came = await punch('60', 'check_in', new Date(Date.now() - 30 * 60e3).toISOString());
+    const mine = async () => (await db.presence(T)).employees.find((e) => e.employeeRef === '60');
+    assert.equal((await mine()).checkedIn, true);
+    assert.equal(await db.setMyReason(T, '60', came.id, 'Not for work'), true);
+    const after = await mine();
+    assert.equal(after.checkedIn, false);
+    assert.equal(after.reason, 'Not for work');
+    assert.equal((await db.myStatus(T, '60')).checkedIn, false, 'their own page agrees');
+    assert.equal((await db.myStatus(T, '60')).todayMinutes, 0, 'and the visit is not paid');
+  });
+
   test('saying "Outside work" afterwards counts the trip in the day', async () => {
     const Y = daysAgo(1);
     await punch('59', 'check_in', zoned(Y, '09:00'));
