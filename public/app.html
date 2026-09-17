@@ -280,20 +280,20 @@
       .wk .act:empty { display:none; }
       .wk .act .btn { width:100%; justify-content:center; }
       .wk.head .who, .wk.head .tot, .wk.head .act { display:none; }
-      .wk .cell { min-width:0; width:100%; padding:6px 1px; white-space:normal; line-height:1.15; font-size:.7rem; }
+      .wk .daycell { min-width:0; width:100%; padding:6px 1px; white-space:normal; line-height:1.15; font-size:.7rem; }
     }
-    .cell {
+    .daycell {
       font:inherit; font-size:.74rem; font-weight:650; min-width:50px; padding:7px 4px;
       border-radius:9px; border:1px solid var(--line); background:var(--card-2); color:var(--ink);
       cursor:pointer; font-variant-numeric:tabular-nums; white-space:nowrap;
     }
-    .cell:hover { border-color:var(--primary); }
-    .cell.none { background:transparent; color:var(--faint); }
-    .cell.fix { background:var(--warn-weak); border-color:var(--warn); color:var(--warn); }
-    .cell.open { border-color:var(--success); }
-    .cell.open::before { content:''; display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--success); margin-right:4px; vertical-align:1px; }
-    .cell:disabled { cursor:default; opacity:.35; border-color:transparent; }
-    .cell.changed::after { content:'✎'; margin-left:3px; font-size:.85em; opacity:.6; }
+    .daycell:hover { border-color:var(--primary); }
+    .daycell.none { background:transparent; color:var(--faint); }
+    .daycell.fix { background:var(--warn-weak); border-color:var(--warn); color:var(--warn); }
+    .daycell.open { border-color:var(--success); }
+    .daycell.open::before { content:''; display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--success); margin-right:4px; vertical-align:1px; }
+    .daycell:disabled { cursor:default; opacity:.35; border-color:transparent; }
+    .daycell.changed::after { content:'✎'; margin-left:3px; font-size:.85em; opacity:.6; }
     .legendrow { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:.74rem; color:var(--muted); margin-top:12px; }
     .legendrow i { font-style:normal; display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px; border:1px solid var(--line); }
 
@@ -344,29 +344,43 @@
       --ios-bg:#F2F2F7; --ios-cell:#FFFFFF; --ios-press:#D1D1D6; --ios-sep:rgba(60,60,67,.29);
       --ios-label:#000000; --ios-2:rgba(60,60,67,.6); --ios-3:rgba(60,60,67,.3);
       --ios-fill:rgba(118,118,128,.12); --ios-seg:#FFFFFF; --ios-scrim:rgba(0,0,0,.4);
-      --ios-green:#34C759; --ios-red:#FF3B30; --ios-alert:#F2F2F2;
+      --ios-green:#34C759; --ios-orange:#FF9500; --ios-red:#FF3B30; --ios-alert:#F2F2F2;
     }
     @media (prefers-color-scheme: dark) {
       :root:not([data-theme="light"]) {
         --ios-bg:#000000; --ios-cell:#1C1C1E; --ios-press:#3A3A3C; --ios-sep:rgba(84,84,88,.65);
         --ios-label:#FFFFFF; --ios-2:rgba(235,235,245,.6); --ios-3:rgba(235,235,245,.3);
         --ios-fill:rgba(118,118,128,.24); --ios-seg:#636366; --ios-scrim:rgba(0,0,0,.6);
-        --ios-green:#30D158; --ios-red:#FF453A; --ios-alert:#2C2C2E;
+        --ios-green:#30D158; --ios-orange:#FF9F0A; --ios-red:#FF453A; --ios-alert:#2C2C2E;
       }
     }
     :root[data-theme="dark"] {
       --ios-bg:#000000; --ios-cell:#1C1C1E; --ios-press:#3A3A3C; --ios-sep:rgba(84,84,88,.65);
       --ios-label:#FFFFFF; --ios-2:rgba(235,235,245,.6); --ios-3:rgba(235,235,245,.3);
       --ios-fill:rgba(118,118,128,.24); --ios-seg:#636366; --ios-scrim:rgba(0,0,0,.6);
-      --ios-green:#30D158; --ios-red:#FF453A; --ios-alert:#2C2C2E;
+      --ios-green:#30D158; --ios-orange:#FF9F0A; --ios-red:#FF453A; --ios-alert:#2C2C2E;
     }
-    body.staff {
+    body.ios {
       background:var(--ios-bg); color:var(--ios-label);
       font-family:-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
       font-size:17px; letter-spacing:-.41px; -webkit-tap-highlight-color:transparent;
     }
-    body.staff header, body.staff nav { display:none; }
-    body.staff main { max-width:560px; padding:20px 16px 40px; }
+    body.ios header { display:none; }
+    body.ios.solo nav { display:none; }            /* staff have one page */
+    body.ios main { max-width:720px; padding:16px 16px 40px; }
+    body.ios.solo main { max-width:560px; padding-top:20px; }
+    /* The tabs, as one segmented control rather than a row of pills. */
+    body.ios nav {
+      display:grid; grid-auto-flow:column; gap:0; margin:16px 16px 14px; padding:2px;
+      background:var(--ios-fill); border-radius:9px; overflow:visible;
+    }
+    body.ios nav button {
+      justify-content:center; gap:5px; padding:6px 4px; border:0; box-shadow:none;
+      background:none; color:var(--ios-label); font-size:13px; font-weight:500; border-radius:7px;
+    }
+    body.ios nav button .ic { width:14px; height:14px; }
+    body.ios nav button.active { background:var(--ios-seg); color:var(--ios-label); font-weight:600; box-shadow:0 3px 8px rgba(0,0,0,.12), 0 3px 1px rgba(0,0,0,.04); }
+    .back { padding:0 0 6px; font-size:17px; }
     .ig { background:var(--ios-cell); border-radius:12px; overflow:hidden; margin:0 0 22px; }
     .cell {
       position:relative; display:flex; align-items:center; gap:12px; width:100%; min-height:44px;
@@ -386,6 +400,7 @@
     .cell__sub { display:block; font-size:15px; line-height:20px; letter-spacing:-.24px; color:var(--ios-2); }
     .cell__detail { color:var(--ios-2); font-variant-numeric:tabular-nums; white-space:nowrap; }
     .cell__label { flex:none; white-space:nowrap; }
+    .cell--action { color:var(--primary); }
     .cell__value { flex:1 1 auto; min-width:0; text-align:right; overflow:hidden; text-overflow:ellipsis; }
     .punches .cell__title { font-size:15px; line-height:20px; }
     .chev { width:8px; height:13px; flex:none; color:var(--ios-3); transition:transform .2s; }
@@ -393,6 +408,7 @@
     .state { font-weight:600; }
     .dot { width:10px; height:10px; border-radius:50%; flex:none; background:var(--ios-3); }
     .dot--in { background:var(--ios-green); }
+    .dot--away { background:var(--ios-orange); }
     .zmark { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
     .zmark i { width:8px; height:8px; border-radius:50%; flex:none; }
     .sum { display:grid; grid-template-columns:repeat(3, 1fr); }
@@ -409,11 +425,11 @@
     .seg button:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
     .ihead { display:flex; justify-content:space-between; gap:8px; padding:0 16px 7px; font-size:13px; letter-spacing:-.08px; color:var(--ios-2); }
     .ihead span:first-child { text-transform:uppercase; }
-    body.staff .cell input {
+    body.ios .cell input {
       font:inherit; font-size:17px; color:var(--ios-label); background:none; border:0; border-radius:0;
       padding:0; width:100%; box-shadow:none;
     }
-    body.staff .cell input.when {
+    body.ios .cell input.when {
       -webkit-appearance:none; appearance:none; width:auto; min-width:0; background:var(--ios-fill);
       border-radius:6px; padding:6px 11px; font-variant-numeric:tabular-nums;
     }
@@ -424,11 +440,11 @@
     .ialert__body { padding:19px 16px 16px; }
     .ialert h3 { margin:0; font-size:17px; font-weight:600; }
     .ialert p { margin:2px 0 0; font-size:13px; letter-spacing:-.08px; }
-    body.staff .ialert input {
+    body.ios .ialert input {
       width:100%; margin-top:14px; padding:7px 8px; font:inherit; font-size:13px; color:var(--ios-label);
       background:var(--ios-cell); border:.5px solid var(--ios-sep); border-radius:6px; box-shadow:none;
     }
-    body.staff .ialert input:focus { outline:none; box-shadow:none; border-color:var(--ios-sep); }
+    body.ios .ialert input:focus { outline:none; box-shadow:none; border-color:var(--ios-sep); }
     .ialert__acts { display:grid; grid-template-columns:1fr 1fr; border-top:.5px solid var(--ios-sep); }
     .ialert__acts button { min-height:44px; font:inherit; font-size:17px; color:var(--primary); background:none; border:0; cursor:pointer; }
     .ialert__acts button + button { border-left:.5px solid var(--ios-sep); font-weight:600; }
@@ -680,16 +696,15 @@
     const api = async (path, opts) => (await apiFull(path, opts)).data;
 
     const TABS = {
-      today: ['Today', 'activity'], timesheets: ['Timesheets', 'chart'],
-      people: ['People', 'users'], setup: ['Setup', 'sliders'],
-      me: ['My attendance', 'user'],
+      today: ['Today', 'activity'], team: ['Staff', 'users'],
+      me: ['Mine', 'user'], setup: ['Setup', 'sliders'],
     };
     // Two branches of one shell — the tab set is the only thing that differs.
     //
     // Four admin sections, grouped by the job being done. The previous eight
     // split a single question across several screens: "what did this person
     // work" needed Logs, Approvals and Report, each with its own date range.
-    const ADMIN_TABS = ['today', 'timesheets', 'setup'];
+    const ADMIN_TABS = ['today', 'team', 'me', 'setup'];
     const STAFF_TABS = ['me'];
     // How each Eesa-owned appRole reads in the header.
     const ROLE_LABEL = { admin: 'Admin', staff: 'Staff' };
@@ -718,7 +733,8 @@
           return;
         }
         const tabs = appRole === 'admin' ? ADMIN_TABS : STAFF_TABS;
-        document.body.classList.toggle('staff', appRole !== 'admin');
+        document.body.classList.add('ios');
+        document.body.classList.toggle('solo', appRole !== 'admin');   // staff: one page, no tabs
         $('nav').innerHTML = tabs.map((k) => `<button data-tab="${k}">${ic(TABS[k][1])}<span>${TABS[k][0]}</span></button>`).join('');
         $('nav').querySelectorAll('button').forEach((b) => b.onclick = () => go(b.dataset.tab));
         go(tabs[0]);
@@ -754,6 +770,28 @@
       check_out: { label: 'Reason for going out', question: 'Why did you go out?', usual: 'Going home', changes: ['Outside work'], other: true },
     };
     const reasonOf = (e) => e.note || WHY[e.type].usual;
+    const isReason = (a, b) => String(a || '').trim().toLowerCase() === String(b).toLowerCase();
+
+    // The rows both sides share: a note, a day, a punch.
+    const cellNote = (text, cls = '') => `<div class="cell"><span class="cell__sub ${cls}">${esc(text)}</span></div>`;
+    const dayCell = (r, minutes, { id = 'mpd-', flag = '' } = {}) => {
+      const end = r.status === 'open' ? 'now' : r.lastOut ? hm(r.lastOut) : 'no check-out';
+      return `<button class="cell" type="button" data-day="${esc(r.date)}" aria-expanded="false">
+          <span class="cell__main"><span class="cell__title">${esc(dayName(r.date))}</span>
+            <span class="cell__sub">${r.firstIn ? `${hm(r.firstIn)} – ${end}` : '—'}${flag ? ` · ${esc(flag)}` : ''}</span></span>
+          <span class="cell__detail">${span(minutes)}</span>${CHEV}
+        </button>
+        <div class="punches" id="${id}${esc(r.date)}" hidden></div>`;
+    };
+    const punchCell = (e, editable) => {
+      const inner = `<span class="cell__main">
+          <span class="cell__title">${e.type === 'check_in' ? 'Checked in' : 'Checked out'}</span>
+          <span class="cell__sub">${e.zoneName ? `${zoneMark(e.zoneName)} · ` : ''}${esc(reasonOf(e))}</span></span>
+        <span class="cell__detail">${hm(e.at)}</span>`;
+      return editable
+        ? `<button class="cell" type="button" data-punch="${esc(e.id)}">${inner}${CHEV}</button>`
+        : `<div class="cell">${inner}</div>`;
+    };
     const CHEV = '<svg class="chev" viewBox="0 0 8 13" aria-hidden="true"><path d="M1.5 1.5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     // "9:02 AM" on the restaurant's clock, in the phone's own format.
     const hm = (iso) => iso
@@ -927,41 +965,22 @@
         if (last) $('mwhy').onclick = () => askWhy(last);
       };
 
-      const dayRow = (r) => {
-        const end = r.status === 'open' ? 'now' : r.lastOut ? hm(r.lastOut) : 'no check-out';
-        return `<button class="cell" type="button" data-day="${esc(r.date)}" aria-expanded="false">
-            <span class="cell__main"><span class="cell__title">${esc(dayName(r.date))}</span>
-              <span class="cell__sub">${r.firstIn ? `${hm(r.firstIn)} – ${end}` : '—'}</span></span>
-            <span class="cell__detail">${span(minutesFor(r))}</span>${CHEV}
-          </button>
-          <div class="punches" id="mpd-${esc(r.date)}" hidden></div>`;
-      };
-      // Reasons can still be changed for today and yesterday.
-      const punchRow = (e, editable) => {
-        const inner = `<span class="cell__main">
-            <span class="cell__title">${e.type === 'check_in' ? 'Checked in' : 'Checked out'}</span>
-            <span class="cell__sub">${e.zoneName ? `${zoneMark(e.zoneName)} · ` : ''}${esc(reasonOf(e))}</span></span>
-          <span class="cell__detail">${hm(e.at)}</span>`;
-        return editable ? `<button class="cell" type="button" data-punch="${esc(e.id)}">${inner}${CHEV}</button>` : `<div class="cell">${inner}</div>`;
-      };
-      const note = (text, cls = '') => `<div class="cell"><span class="cell__sub ${cls}">${esc(text)}</span></div>`;
-
-      const openDay = async (el) => {
+      const openPunches = async (el) => {
         const day = el.dataset.day;
         const box = $('mpd-' + day);
         box.hidden = false;
         el.setAttribute('aria-expanded', 'true');
         MINE.openDay = day;
-        box.innerHTML = note('Loading…');
+        box.innerHTML = cellNote('Loading…');
         try {
           const evs = (await api('/api/getMyEvents?' + new URLSearchParams({ from: day, to: day }))).slice().reverse();
           const editable = day >= yesterday;
-          box.innerHTML = evs.length ? evs.map((e) => punchRow(e, editable)).join('') : note('Nothing recorded on this day.');
+          box.innerHTML = evs.length ? evs.map((e) => punchCell(e, editable)).join('') : cellNote('Nothing recorded on this day.');
           box.querySelectorAll('[data-punch]').forEach((b) => {
             b.onclick = () => askWhy(evs.find((e) => String(e.id) === b.dataset.punch));
           });
         } catch (e) {
-          box.innerHTML = note(e.message, 'err');
+          box.innerHTML = cellNote(e.message, 'err');
         }
       };
 
@@ -977,14 +996,14 @@
         $('mrange').textContent = rangeName(from, to);
         shown = [];
         $('msum').textContent = '';
-        $('mdays').innerHTML = note('Loading…');
+        $('mdays').innerHTML = cellNote('Loading…');
         try {
           const data = await api('/api/getMyHistory?' + new URLSearchParams({ from, to }));
           if (seq !== MINE.seq || !$('mdays')) return;
           const rows = ((data && data.days) || []).filter((r) => Number(r.totalMinutes) > 0 || r.firstIn);
           shown = rows;
           $('msum').textContent = rows.length ? span(rows.reduce((a, r) => a + minutesFor(r), 0)) : '';
-          $('mdays').innerHTML = rows.length ? rows.map(dayRow).join('') : note('No hours on these dates.');
+          $('mdays').innerHTML = rows.length ? rows.map((r) => dayCell(r, minutesFor(r))).join('') : cellNote('No hours on these dates.');
           $('mdays').querySelectorAll('[data-day]').forEach((el) => {
             el.onclick = () => {
               const box = $('mpd-' + el.dataset.day);
@@ -994,13 +1013,13 @@
                 MINE.openDay = null;
                 return;
               }
-              openDay(el);
+              openPunches(el);
             };
           });
           const reopen = MINE.openDay && $('mdays').querySelector(`[data-day="${MINE.openDay}"]`);
-          if (reopen) openDay(reopen);
+          if (reopen) openPunches(reopen);
         } catch (e) {
-          if (seq === MINE.seq && $('mdays')) $('mdays').innerHTML = note(e.message, 'err');
+          if (seq === MINE.seq && $('mdays')) $('mdays').innerHTML = cellNote(e.message, 'err');
         }
       };
 
@@ -1040,137 +1059,270 @@
     };
 
     // ==================== ADMIN ====================
-    // Four sections, grouped by what an admin is actually trying to do, rather
-    // than by which database table the screen happens to read:
+    // A manager has three questions and one of their own:
     //
-    //   Today       who is here right now, and where
-    //   Timesheets  what people worked, and any day that needs a fix
-    //   People      who is enrolled, as what, at what rate
-    //   Setup       the things you configure once: zones, shifts, timezone
+    //   Today   who is at work, who is out for work, who never came in
+    //   Staff   everyone; tap a person for their state, hours and days
+    //   Mine    their own attendance — the staff page, unchanged
+    //   Setup   zones, people, working hours
     //
-    // The previous eight tabs split one question across several places — "what
-    // did this person work" lived in Logs, Approvals AND Report, each with its
-    // own date range to set. Timesheets is now a single range and one drill-down
-    // path: everyone -> one person's days -> the punches behind a day.
-
-    // ---- shared bits -------------------------------------------------------
+    // Everything about a person lives on that person's page: no separate logs,
+    // approvals and report screens asking the same question three ways.
 
     // Everyone enrolled, for the "pick a person" controls.
     const enrolled = async () => (await api('/api/admin/members')).filter((m) => m.attendanceRole);
 
-    // ==================== TODAY ====================
-    // What is happening right now. Nothing here asks a question: arrivals record
-    // themselves, and a day that needs a fix is fixed from Timesheets.
-    VIEWS.today = async () => {
-      const [from, to] = weekRange(0);
-      const [presence, zones, week, members] = await Promise.all([
-        api('/api/admin/presence'),
-        api('/api/admin/zones').catch(() => []),
-        api('/api/admin/approvals?' + new URLSearchParams({ from, to })).catch(() => []),
-        api('/api/admin/members').catch(() => []),
-      ]);
-      // Staff whose phone can't record their hours by itself. Unknown until the
-      // roster reports phones at all, and then the zone count shows instead.
-      const phonesKnown = members.some((m) => 'device' in m);
-      const notReady = members.filter((m) => m.attendanceRole === 'staff' && 'device' in m && !(m.device && m.device.ready)).length;
-      const rows = presence.employees || [];
-      const people = rows.filter((p) => p.lastLocation);
-      const inNow = rows.filter((r) => r.checkedIn).length;
-      const needsFix = week.filter((d) => d.needsFix).length;
-      const hasMap = typeof window.L !== 'undefined';
-
-      $('view').innerHTML = `
-        ${needsFix ? `<div class="card needs">
-          <h2>${ic('activity')} ${needsFix === 1 ? 'One day needs' : `${needsFix} days need`} a fix</h2>
-          <p class="lead">This week has ${needsFix === 1 ? 'a day' : 'days'} with a missing or doubtful time. Tap ${needsFix === 1 ? 'it' : 'each one'} in Timesheets to put the times right.</p>
-          <button class="btn primary" id="gofix">Open Timesheets</button>
-        </div>` : ''}
-
-        <div class="hero ${inNow ? 'hero--on' : ''}">
-          <div class="hero__top">
-            <div class="hero__badge"></div>
-            <div class="hero__state">${inNow ? `${inNow} at work now` : 'Nobody at work right now'}</div>
-          </div>
-          <div class="stats">
-            <div class="stat"><div class="stat__num num">${rows.length}</div><div class="stat__lbl">Came in today</div></div>
-            ${phonesKnown
-              ? `<div class="stat" id="goready" role="button" tabindex="0" style="cursor:pointer"><div class="stat__num num">${notReady}</div><div class="stat__lbl">Phones not ready</div></div>`
-              : `<div class="stat"><div class="stat__num num">${zones.length}</div><div class="stat__lbl">Work zones</div></div>`}
-            <div class="stat"><div class="stat__num num">${needsFix}</div><div class="stat__lbl">Need a fix</div></div>
-          </div>
-        </div>
-
-        <div class="card">
-          <h2>${ic('users')} Who's in</h2>
-          ${rows.length ? `
-            <div class="toolbar">
-              <input class="search" id="pq" type="search" placeholder="Search name" autocomplete="off">
-              <select id="pf">
-                <option value="">Everyone today</option>
-                <option value="in">At work</option>
-                <option value="out">Out</option>
-              </select>
-              <span class="count" id="pcount"></span>
-            </div>
-            <div id="pbody"></div>`
-            : empty('activity', 'Nobody has come in yet today.')}
-        </div>
-
-        ${hasMap && people.length ? `<div class="card">
-          <h2>${ic('pin')} Where everyone is</h2>
-          <div id="zmap"></div>
-          <div class="legend">
-            <span class="k"><span class="dot" style="background:var(--success)"></span> At work (${inNow})</span>
-            <span class="k"><span class="dot" style="background:var(--muted)"></span> Out</span>
-            <span class="k"><span class="dot" style="background:transparent;border:2px solid #8aa0a8"></span> Work zone</span>
-          </div>
-          <div class="map-hint">Each dot is where that person was when they arrived or left — phones report at the zone edge, not continuously.</div>
-        </div>` : ''}`;
-
-      const gofix = $('gofix');
-      if (gofix) gofix.onclick = () => go('timesheets');
-      const goready = $('goready');
-      if (goready) goready.onclick = goready.onkeydown = (e) => { if (!e.key || e.key === 'Enter') go('setup'); };
-
-      if (rows.length) {
-        const render = () => {
-          const qy = ($('pq').value || '').trim().toLowerCase();
-          const f = $('pf').value;
-          const list = rows.filter((r) => {
-            if (qy && !`${r.name || ''} ${r.email || ''} ${r.employeeRef}`.toLowerCase().includes(qy)) return false;
-            if (f === 'in' && !r.checkedIn) return false;
-            if (f === 'out' && r.checkedIn) return false;
-            return true;
-          });
-          $('pcount').textContent = list.length === rows.length
-            ? `${rows.length} ${rows.length === 1 ? 'person' : 'people'}`
-            : `${list.length} of ${rows.length}`;
-          $('pbody').innerHTML = list.length
-            ? `<div class="tablewrap"><table><thead><tr><th>Name</th><th></th><th>Since</th><th>Where</th></tr></thead><tbody>
-              ${list.map((r) => `<tr>
-                <td><div style="font-weight:600">${esc(r.name || r.employeeRef)}</div></td>
-                <td>${r.checkedIn ? '<span class="pill complete">At work</span>'
-                  : onlyOnSite(r) ? '<span class="pill">On site</span>'
-                  : '<span class="pill">Out</span>'}${r.reason ? ` <span class="muted" style="font-size:.78rem">${esc(r.reason)}</span>` : ''}</td>
-                <td class="num">${timeOf(r.at)}</td>
-                <td>${whereText(r.lastLocation)}</td>
-              </tr>`).join('')}</tbody></table></div>`
-            : empty('activity', 'Nobody matches those filters.');
-        };
-        $('pq').oninput = render;
-        $('pf').onchange = render;
-        render();
-      }
-
-      if (hasMap && people.length) drawZoneMap(zones, people, { editable: false });
+    // Where somebody stands right now, from their last punch today.
+    const stateOf = (p) => (p.checkedIn ? 'in'
+      : isReason(p.reason, 'Outside work') ? 'out'
+      : isReason(p.reason, 'Not for work') ? 'onsite'
+      : p.at ? 'done'
+      : 'absent');
+    const STATE = {
+      in: ['At work', 'dot--in'],
+      out: ['Out for work', 'dot--away'],
+      onsite: ['On site, not working', ''],
+      done: ['Finished today', ''],
+      absent: ['Not in today', ''],
     };
 
-    // ==================== TIMESHEETS ====================
+    // One person as a row: where they stand, since when, which zone, and why.
+    const personRow = (p) => {
+      const s = stateOf(p);
+      const bits = [];
+      if (s === 'in' && p.at) bits.push(`Since ${hm(p.at)}`);
+      else if (p.at) bits.push(hm(p.at));
+      const zone = p.lastLocation && p.lastLocation.zoneName;
+      if (zone) bits.push(zoneMark(zone));
+      if (p.reason && s !== 'in') bits.push(esc(p.reason));
+      if (!p.at) bits.push(p.device && !p.device.ready ? esc(p.device.reason) : 'Nothing recorded today');
+      return `<button class="cell" type="button" data-person="${esc(p.employeeRef)}">
+          <span class="dot ${STATE[s][1]}"></span>
+          <span class="cell__main"><span class="cell__title">${esc(p.name || p.employeeRef)}</span>
+            <span class="cell__sub">${bits.join(' · ')}</span></span>
+          ${p.todayMinutes != null ? `<span class="cell__detail">${span(p.todayMinutes)}</span>` : ''}${CHEV}
+        </button>`;
+    };
+
+    // The roster and today's punches, merged: everyone enrolled appears, whether
+    // or not their phone has recorded anything.
+    async function teamToday() {
+      const today = todayTZ();
+      const [presence, members, days] = await Promise.all([
+        api('/api/admin/presence'),
+        api('/api/admin/members').catch(() => []),
+        api('/api/admin/approvals?' + new URLSearchParams({ from: today, to: today })).catch(() => []),
+      ]);
+      const punched = new Map((presence.employees || []).map((r) => [String(r.employeeRef), r]));
+      const minutes = new Map(days.map((d) => [String(d.employeeRef), d.totalMinutes]));
+      const people = [];
+      const seen = new Set();
+      for (const m of members) {
+        if (!m.attendanceRole) continue;
+        const ref = String(m.employeeRef);
+        seen.add(ref);
+        const p = punched.get(ref) || { employeeRef: ref, checkedIn: false, at: null, reason: null };
+        people.push({ ...p, name: m.name || p.name || m.email || ref, role: m.attendanceRole, device: m.device, todayMinutes: minutes.get(ref) ?? null });
+      }
+      // Somebody who punched but is no longer on the roster still has to appear.
+      for (const [ref, p] of punched) {
+        if (!seen.has(ref)) people.push({ ...p, name: p.name || ref, todayMinutes: minutes.get(ref) ?? null });
+      }
+      people.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      return { people, presence };
+    }
+
+    // ==================== TODAY ====================
+    // Who is at work, who is out for work, who finished, and who never came in.
+    VIEWS.today = async () => {
+      const { people } = await teamToday();
+      const of = (k) => people.filter((p) => stateOf(p) === k);
+      const groups = ['in', 'out', 'onsite', 'done', 'absent'];
+      $('view').innerHTML = `
+        <div class="ig sum">
+          <div><div class="sum__l">At work</div><div class="sum__n">${of('in').length}</div></div>
+          <div><div class="sum__l">Out for work</div><div class="sum__n">${of('out').length}</div></div>
+          <div><div class="sum__l">Not in</div><div class="sum__n">${of('absent').length}</div></div>
+        </div>
+        ${people.length ? groups.map((k) => {
+          const list = of(k);
+          if (!list.length) return '';
+          return `<div class="ihead"><span>${STATE[k][0]}</span><span>${list.length}</span></div>
+            <div class="ig">${list.map(personRow).join('')}</div>`;
+        }).join('') : `<div class="ig">${cellNote('Nobody is enrolled in attendance yet.')}</div>`}`;
+      bindPeople($('view'));
+    };
+
+    // ==================== STAFF ====================
+    // Everyone, searchable, and the week grid for a payroll run. Tapping a
+    // person opens their page.
+    const TEAM = { mode: 'people', person: null, q: '' };
+    const bindPeople = (host) => host.querySelectorAll('[data-person]').forEach((b) => {
+      b.onclick = () => { TEAM.person = b.dataset.person; go('team'); };
+    });
+
+    VIEWS.team = async () => {
+      if (TEAM.person) return personPage(TEAM.person);
+      const { people } = await teamToday();
+      $('view').innerHTML = `
+        <div class="seg" id="tmode" role="tablist" aria-label="View">
+          <button type="button" role="tab" data-m="people">People</button>
+          <button type="button" role="tab" data-m="week">Week</button>
+        </div>
+        <div id="tbody"></div>`;
+      $('tmode').querySelectorAll('button').forEach((b) => {
+        const on = b.dataset.m === TEAM.mode;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', String(on));
+        b.onclick = () => { TEAM.mode = b.dataset.m; go('team'); };
+      });
+      const body = $('tbody');
+      if (TEAM.mode === 'week') return weekGrid(body);
+
+      const draw = () => {
+        const q = TEAM.q.trim().toLowerCase();
+        const list = q ? people.filter((p) => String(p.name).toLowerCase().includes(q)) : people;
+        $('tlist').innerHTML = list.length ? list.map(personRow).join('') : cellNote('Nobody matches that name.');
+        bindPeople($('tlist'));
+      };
+      body.innerHTML = `
+        <div class="ig"><label class="cell"><input id="tq" type="search" placeholder="Search name" autocomplete="off" value="${esc(TEAM.q)}"></label></div>
+        <div class="ihead"><span>Everyone</span><span>${people.length}</span></div>
+        <div class="ig" id="tlist"></div>`;
+      $('tq').oninput = () => { TEAM.q = $('tq').value; draw(); };
+      draw();
+    };
+
+    // ---- One person: where they stand, their hours, and their days ----------
+    const PERSON = { period: 'week', from: null, to: null, openDay: null, seq: 0 };
+
+    async function personPage(ref) {
+      const today = todayTZ();
+      const yesterday = addDaysYmd(today, -1);
+      const monday = weekRange(0)[0];
+      const [members, presence, recent] = await Promise.all([
+        enrolled().catch(() => []),
+        api('/api/admin/presence'),
+        api('/api/admin/approvals?' + new URLSearchParams({ from: monday < yesterday ? monday : yesterday, to: today })).catch(() => []),
+      ]);
+      const m = members.find((x) => String(x.employeeRef) === String(ref)) || {};
+      const live = (presence.employees || []).find((x) => String(x.employeeRef) === String(ref)) || { employeeRef: ref, checkedIn: false };
+      const p = { ...live, name: m.name || live.name || m.email || ref, device: m.device, role: m.attendanceRole };
+      const mine = recent.filter((d) => String(d.employeeRef) === String(ref));
+      const minutesOn = (d) => Number((mine.find((x) => x.day === d) || {}).totalMinutes || 0);
+      const weekSoFar = mine.filter((d) => d.day >= monday).reduce((n, d) => n + Number(d.totalMinutes || 0), 0);
+      const s = stateOf(p);
+      const zone = p.lastLocation && p.lastLocation.zoneName;
+
+      $('view').innerHTML = `
+        <button class="btn link back" type="button" id="pback">‹ Staff</button>
+        <div class="ig">
+          <div class="cell"><span class="dot ${STATE[s][1]}"></span>
+            <span class="cell__main"><span class="cell__title state">${esc(p.name)}</span>
+              <span class="cell__sub">${[STATE[s][0], p.at ? (s === 'in' ? `since ${hm(p.at)}` : hm(p.at)) : '', zone ? zoneMark(zone) : '', p.reason && s !== 'in' ? esc(p.reason) : ''].filter(Boolean).join(' · ')}</span></span></div>
+          ${p.device ? `<div class="cell"><span class="cell__label">Phone</span>
+            <span class="cell__detail cell__value">${p.device.ready ? 'Ready' : esc(p.device.reason)}</span></div>` : ''}
+        </div>
+        <div class="ig sum">
+          <div><div class="sum__l">Today</div><div class="sum__n">${span(minutesOn(today))}</div></div>
+          <div><div class="sum__l">Yesterday</div><div class="sum__n">${span(minutesOn(yesterday))}</div></div>
+          <div><div class="sum__l">This Week</div><div class="sum__n">${span(weekSoFar)}</div></div>
+        </div>
+        <div class="seg" id="pp" role="tablist" aria-label="Period">${Object.entries(MINE_PERIODS).map(([k, [label]]) =>
+          `<button type="button" role="tab" data-p="${k}">${label}</button>`).join('')}</div>
+        <div class="ig" id="pdates" hidden>
+          <label class="cell"><span class="cell__main">From</span><input class="when" type="date" id="pfrom"></label>
+          <label class="cell"><span class="cell__main">To</span><input class="when" type="date" id="pto"></label>
+        </div>
+        <div class="ihead"><span id="prange"></span><span id="psum"></span></div>
+        <div class="ig" id="pdays"></div>`;
+
+      $('pback').onclick = () => { TEAM.person = null; PERSON.openDay = null; go('team'); };
+
+      const openPunches = async (el) => {
+        const day = el.dataset.day;
+        const box = $('ppd-' + day);
+        box.hidden = false;
+        el.setAttribute('aria-expanded', 'true');
+        PERSON.openDay = day;
+        box.innerHTML = cellNote('Loading…');
+        try {
+          const evs = await api('/api/admin/events?' + new URLSearchParams({ employeeRef: ref, from: day, to: day }));
+          const rows = evs.slice().reverse().map((e) => punchCell(e, false)).join('');
+          box.innerHTML = (rows || cellNote('Nothing recorded on this day.'))
+            + `<button class="cell cell--action" type="button" data-fix="${esc(day)}">Fix times</button>`;
+          box.querySelector('[data-fix]').onclick = () => {
+            const d = (PERSON.days || []).find((x) => x.day === day);
+            openDay(p.name, ref, day, d);
+          };
+        } catch (e) {
+          box.innerHTML = cellNote(e.message, 'err');
+        }
+      };
+
+      const list = async () => {
+        const seq = ++PERSON.seq;
+        const [from, to] = MINE_PERIODS[PERSON.period][1]();
+        $('pp').querySelectorAll('button').forEach((b) => {
+          const on = b.dataset.p === PERSON.period;
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-selected', String(on));
+        });
+        $('pdates').hidden = PERSON.period !== 'custom';
+        $('prange').textContent = rangeName(from, to);
+        $('psum').textContent = '';
+        $('pdays').innerHTML = cellNote('Loading…');
+        try {
+          const all = await api('/api/admin/approvals?' + new URLSearchParams({ from, to }));
+          if (seq !== PERSON.seq || !$('pdays')) return;
+          const days = all.filter((d) => String(d.employeeRef) === String(ref))
+            .sort((a, b) => b.day.localeCompare(a.day));
+          PERSON.days = days;
+          $('psum').textContent = days.length ? span(days.reduce((n, d) => n + Number(d.totalMinutes || 0), 0)) : '';
+          $('pdays').innerHTML = days.length
+            ? days.map((d) => dayCell({ date: d.day, firstIn: d.firstIn, lastOut: d.lastOut, status: d.open ? 'open' : 'complete' },
+                d.totalMinutes, { id: 'ppd-', flag: d.needsFix ? 'Needs a fix' : d.corrected ? 'Changed by a manager' : '' })).join('')
+            : cellNote('No hours on these dates.');
+          $('pdays').querySelectorAll('[data-day]').forEach((el) => {
+            el.onclick = () => {
+              const box = $('ppd-' + el.dataset.day);
+              if (!box.hidden) { box.hidden = true; el.setAttribute('aria-expanded', 'false'); PERSON.openDay = null; return; }
+              openPunches(el);
+            };
+          });
+          const again = PERSON.openDay && $('pdays').querySelector(`[data-day="${PERSON.openDay}"]`);
+          if (again) openPunches(again);
+        } catch (e) {
+          if (seq === PERSON.seq && $('pdays')) $('pdays').innerHTML = cellNote(e.message, 'err');
+        }
+      };
+
+      $('pp').querySelectorAll('button').forEach((b) => {
+        b.onclick = () => {
+          if (b.dataset.p === 'custom' && !PERSON.from) [PERSON.from, PERSON.to] = MINE_PERIODS[PERSON.period][1]();
+          PERSON.period = b.dataset.p;
+          if (PERSON.period === 'custom') { $('pfrom').value = PERSON.from; $('pto').value = PERSON.to; }
+          list();
+        };
+      });
+      const pick = () => {
+        const f = $('pfrom').value, t = $('pto').value;
+        if (!f || !t) return;
+        [PERSON.from, PERSON.to] = f <= t ? [f, t] : [t, f];
+        list();
+      };
+      $('pfrom').onchange = pick;
+      $('pto').onchange = pick;
+      if (PERSON.from) { $('pfrom').value = PERSON.from; $('pto').value = PERSON.to; }
+      list();
+    }
+
+    // ==================== THE WEEK GRID ====================
     // One week at a time. Everyone's days on one screen; a day that needs a fix
     // says so; tap it, fix it, and approve the whole week in one tap. Nothing is
     // approved day by day any more.
     let WEEK = 0; // 0 = this week, -1 = last week
-    VIEWS.timesheets = async () => {
+    async function weekGrid(host) {
       const [from, to] = weekRange(WEEK);
       const days = [0, 1, 2, 3, 4, 5, 6].map((i) => addDaysYmd(from, i));
       const [approvals, members] = await Promise.all([
@@ -1201,11 +1353,11 @@
       const cell = (p, day) => {
         const d = p.days[day];
         const attrs = `data-ref="${esc(p.ref)}" data-day="${day}"`;
-        if (!d) return `<button class="cell none" ${attrs} ${day > today ? 'disabled' : ''} title="Nothing recorded">–</button>`;
-        if (d.open) return `<button class="cell open" ${attrs} title="At work now">${dur(d.totalMinutes)}</button>`;
-        if (d.needsFix) return `<button class="cell fix" ${attrs} title="Needs a fix">${d.totalMinutes ? dur(d.totalMinutes) : 'Fix'}</button>`;
+        if (!d) return `<button class="daycell none" ${attrs} ${day > today ? 'disabled' : ''} title="Nothing recorded">–</button>`;
+        if (d.open) return `<button class="daycell open" ${attrs} title="At work now">${dur(d.totalMinutes)}</button>`;
+        if (d.needsFix) return `<button class="daycell fix" ${attrs} title="Needs a fix">${d.totalMinutes ? dur(d.totalMinutes) : 'Fix'}</button>`;
         const edited = d.corrected ? ' changed' : '';
-        return `<button class="cell${edited}" ${attrs} ${d.corrected ? 'title="Changed by a manager"' : ''}>${dur(d.totalMinutes)}</button>`;
+        return `<button class="daycell${edited}" ${attrs} ${d.corrected ? 'title="Changed by a manager"' : ''}>${dur(d.totalMinutes)}</button>`;
       };
       const action = (p) => {
         if (p.fix) return `<span class="pill pending">Fix ${p.fix}</span>`;
@@ -1213,7 +1365,7 @@
       };
       const title = WEEK === 0 ? 'This week' : WEEK === -1 ? 'Last week' : `${-WEEK} weeks ago`;
 
-      $('view').innerHTML = `<div class="card">
+      host.innerHTML = `<div class="card">
         <h2>${ic('chart')} Timesheets</h2>
         <div class="weekbar">
           <button class="btn small" id="wkprev" type="button" aria-label="Previous week">‹</button>
@@ -1237,13 +1389,13 @@
         </div>` : empty('users', 'Nobody has attendance yet.')}
       </div>`;
 
-      $('wkprev').onclick = () => { WEEK -= 1; go('timesheets'); };
-      $('wknext').onclick = () => { if (WEEK < 0) { WEEK += 1; go('timesheets'); } };
-      $('view').querySelectorAll('button.cell').forEach((b) => b.onclick = () => {
+      $('wkprev').onclick = () => { WEEK -= 1; go(TAB); };
+      $('wknext').onclick = () => { if (WEEK < 0) { WEEK += 1; go(TAB); } };
+      host.querySelectorAll('button.daycell').forEach((b) => b.onclick = () => {
         const p = byRef.get(b.dataset.ref);
         openDay(p ? p.name : b.dataset.ref, b.dataset.ref, b.dataset.day, p && p.days[b.dataset.day]);
       });
-    };
+    }
 
     // Fix times: one day, with what the phone saw, the times to save, and Undo.
     async function openDay(name, ref, day, d) {
@@ -1285,7 +1437,7 @@
         try {
           await api(`/api/admin/days/${encodeURIComponent(ref)}/${day}/correction`, { method: 'DELETE' });
           toast('Back to the phone’s times');
-          go('timesheets');
+          go(TAB);
         } catch (e) { toast(e.message, true); }
       };
       if ($('fxundo')) $('fxundo').onclick = async () => { close(); await undo(); };
@@ -1302,7 +1454,7 @@
           await api(`/api/admin/days/${encodeURIComponent(ref)}/${day}`, { method: 'PUT', body: { firstIn, lastOut } });
           close();
           toastUndo(`Saved · ${name} · ${dayLabel(day)}`, undo);
-          go('timesheets');
+          go(TAB);
         } catch (e) { $('fxsave').disabled = false; toast(e.message, true); }
       };
 
