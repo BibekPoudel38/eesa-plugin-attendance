@@ -809,10 +809,17 @@
         <div class="ihead"><span id="mrange"></span><span id="msum"></span></div>
         <div class="ig" id="mdays"></div>`;
 
+      // Today's figure is live everywhere it appears: the tile, its row in the
+      // list and the period total, so the three never disagree by a minute.
+      let shown = [];
+      const minutesFor = (r) => (r.date === today ? todayNow() : Number(r.totalMinutes || 0));
       const totals = () => {
         if (!$('mtoday')) return;
         $('mtoday').textContent = span(todayNow());
         $('mweek').textContent = span(earlierThisWeek + todayNow());
+        if (shown.length) $('msum').textContent = span(shown.reduce((a, r) => a + minutesFor(r), 0));
+        const row = $('mdays').querySelector(`[data-day="${today}"] .cell__detail`);
+        if (row) row.textContent = span(todayNow());
       };
       const adopt = (next) => { st = next; readAt = Date.now(); paintNow(); totals(); };
       // Disabled while it works; a failure says why and gives the button back.
@@ -895,7 +902,7 @@
         return `<button class="cell" type="button" data-day="${esc(r.date)}" aria-expanded="false">
             <span class="cell__main"><span class="cell__title">${esc(dayName(r.date))}</span>
               <span class="cell__sub">${r.firstIn ? `${hm(r.firstIn)} – ${end}` : '—'}</span></span>
-            <span class="cell__detail">${span(r.totalMinutes)}</span>${CHEV}
+            <span class="cell__detail">${span(minutesFor(r))}</span>${CHEV}
           </button>
           <div class="punches" id="mpd-${esc(r.date)}" hidden></div>`;
       };
@@ -915,13 +922,15 @@
         });
         $('mdates').hidden = MINE.period !== 'custom';
         $('mrange').textContent = rangeName(from, to);
+        shown = [];
         $('msum').textContent = '';
         $('mdays').innerHTML = note('Loading…');
         try {
           const data = await api('/api/getMyHistory?' + new URLSearchParams({ from, to }));
           if (seq !== MINE.seq || !$('mdays')) return;
           const rows = ((data && data.days) || []).filter((r) => Number(r.totalMinutes) > 0 || r.firstIn);
-          $('msum').textContent = rows.length ? span(rows.reduce((a, r) => a + Number(r.totalMinutes || 0), 0)) : '';
+          shown = rows;
+          $('msum').textContent = rows.length ? span(rows.reduce((a, r) => a + minutesFor(r), 0)) : '';
           $('mdays').innerHTML = rows.length ? rows.map(dayRow).join('') : note('No hours on these dates.');
           $('mdays').querySelectorAll('[data-day]').forEach((el) => {
             el.onclick = async () => {
