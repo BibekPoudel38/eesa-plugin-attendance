@@ -393,6 +393,8 @@
     .state { font-weight:600; }
     .dot { width:10px; height:10px; border-radius:50%; flex:none; background:var(--ios-3); }
     .dot--in { background:var(--ios-green); }
+    .zmark { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
+    .zmark i { width:8px; height:8px; border-radius:50%; flex:none; }
     .sum { display:grid; grid-template-columns:repeat(3, 1fr); }
     .sum > div { position:relative; padding:10px 12px 12px; }
     .sum > div + div::before { content:''; position:absolute; left:0; top:12px; bottom:12px; width:.5px; background:var(--ios-sep); }
@@ -569,10 +571,26 @@
 
     // "Main Office · 34 m from centre (±8 m) · map" — where a punch happened,
     // always paired with a link so the admin can see it for themselves.
+    // One mark per work zone: a coloured dot beside its name, the same colour
+    // everywhere that zone is named, so a day spent at two places reads at a
+    // glance. Keyed by name, because editing a zone makes a new one with the
+    // same name.
+    const ZONE_COLOURS = ['#0A84FF', '#FF9F0A', '#BF5AF2', '#30B0C7', '#FF375F', '#5E5CE6', '#AC8E68'];
+    let ZONE_ORDER = [];
+    const zoneColour = (name) => {
+      const key = String(name || '').trim().toLowerCase();
+      const at = ZONE_ORDER.indexOf(key);
+      const i = at >= 0 ? at : [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+      return ZONE_COLOURS[i % ZONE_COLOURS.length];
+    };
+    const zoneMark = (name) => (name
+      ? `<span class="zmark"><i style="background:${zoneColour(name)}"></i>${esc(name)}</span>`
+      : '');
+
     const whereText = (loc) => {
       if (!loc) return '<span class="muted">No location</span>';
       const bits = [];
-      if (loc.zoneName) bits.push(esc(loc.zoneName));
+      if (loc.zoneName) bits.push(zoneMark(loc.zoneName));
       if (loc.distanceM != null) bits.push(`${metres(loc.distanceM)} from centre`);
       if (loc.accuracyM != null) bits.push(`±${metres(loc.accuracyM)}`);
       const link = `<a class="maplink" target="_blank" rel="noopener" href="${osm(loc.lat, loc.lng)}">map</a>`;
@@ -679,6 +697,11 @@
         CTX = await api('/api/ui/context');
         // Every time on this page is the restaurant's.
         if (CTX.timezone) TZ = CTX.timezone;
+        // The workspace's zones in their own order, so each keeps its colour.
+        // Without them a mark still gets a colour, taken from the zone's name.
+        try {
+          ZONE_ORDER = [...new Set((await api('/api/getMyZones')).map((z) => String(z.name || '').trim().toLowerCase()))];
+        } catch (_) { ZONE_ORDER = []; }
         // appRole (Eesa authority) is what we branch on: 'admin' | 'staff' | null.
         // Older builds only sent `role` ('manager'|'staff'|null); fall back to it
         // so a mixed deploy still resolves.
@@ -891,9 +914,10 @@
         if (!box) return;
         // Today's punches, newest first: the latest says where they stand.
         const last = (st.events || [])[0];
+        const where = last && last.zoneName ? ` · ${zoneMark(last.zoneName)}` : '';
         const [state, sub] = !last ? ['Not checked in', 'You’re checked in automatically when you arrive.']
-          : last.type === 'check_in' ? ['Checked in', `Since ${hm(st.checkedIn ? st.since : last.at)}`]
-          : ['Checked out', `Left at ${hm(last.at)}`];
+          : last.type === 'check_in' ? ['Checked in', `Since ${hm(st.checkedIn ? st.since : last.at)}${where}`]
+          : ['Checked out', `Left at ${hm(last.at)}${where}`];
         box.innerHTML = `
           <div class="cell"><span class="dot${st.checkedIn ? ' dot--in' : ''}"></span>
             <span class="cell__main"><span class="cell__title state">${state}</span><span class="cell__sub">${sub}</span></span></div>
@@ -914,7 +938,7 @@
       const punchRow = (e, editable) => {
         const inner = `<span class="cell__main">
             <span class="cell__title">${e.type === 'check_in' ? 'Checked in' : 'Checked out'}</span>
-            <span class="cell__sub">${esc(reasonOf(e))}</span></span>
+            <span class="cell__sub">${e.zoneName ? `${zoneMark(e.zoneName)} · ` : ''}${esc(reasonOf(e))}</span></span>
           <span class="cell__detail">${hm(e.at)}</span>`;
         return editable ? `<button class="cell" type="button" data-punch="${esc(e.id)}">${inner}${CHEV}</button>` : `<div class="cell">${inner}</div>`;
       };

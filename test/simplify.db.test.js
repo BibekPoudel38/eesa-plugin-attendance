@@ -233,6 +233,7 @@ describe('simplified attendance on a real database', { skip }, () => {
     assert.equal(await db.setMyReason(T, '56', 'not-an-id', 'Work'), false);
     const st = await db.myStatus(T, '56');
     assert.deepEqual(st.events.map((e) => e.note), ['Outside work', null], 'Work is the default, so nothing is stored');
+    assert.deepEqual(st.events.map((e) => e.zoneName), ['Chups Anaheim', 'Chups Anaheim'], 'each entry names its zone');
     assert.equal(st.todayMinutes, 60, 'a reason never changes the hours');
     assert.equal((await db.presence(T)).employees.find((e) => e.employeeRef === '56').reason, 'Outside work');
     const old = await punch('58', 'check_in', new Date(Date.now() - 3 * 24 * 3600e3).toISOString());

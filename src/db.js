@@ -1277,6 +1277,8 @@ const eventOut = (r) => {
     workType: r.work_type || null,
     forWork: r.for_work !== false,
     note: r.note || null,
+    // Where it happened, by name, even when no position came with it.
+    zoneName: r.zone_name || null,
     location,
     verification: v.state,          // 'verified' | 'outside' | 'unverified'
     verificationReason: v.reason,
