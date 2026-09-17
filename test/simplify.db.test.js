@@ -232,7 +232,7 @@ describe('simplified attendance on a real database', { skip }, () => {
     assert.equal(await db.setMyReason(T, '57', came.id, 'Not mine'), false, "someone else's punch");
     assert.equal(await db.setMyReason(T, '56', 'not-an-id', 'Work'), false);
     const st = await db.myStatus(T, '56');
-    assert.deepEqual(st.events.map((e) => e.note), ['Outside work', 'Work']);
+    assert.deepEqual(st.events.map((e) => e.note), ['Outside work', null], 'Work is the default, so nothing is stored');
     assert.equal(st.todayMinutes, 60, 'a reason never changes the hours');
     assert.equal((await db.presence(T)).employees.find((e) => e.employeeRef === '56').reason, 'Outside work');
     const old = await punch('58', 'check_in', new Date(Date.now() - 3 * 24 * 3600e3).toISOString());
@@ -248,7 +248,8 @@ describe('simplified attendance on a real database', { skip }, () => {
     assert.equal((await dayRow('59', Y)).totalMinutes, 390);
     assert.equal(await db.setMyReason(T, '59', out.id, 'Outside work'), true);
     assert.equal((await dayRow('59', Y)).totalMinutes, 480);
-    assert.equal(await db.setMyReason(T, '59', out.id, ''), true, 'clearing it is allowed');
+    assert.equal(await db.setMyReason(T, '59', out.id, 'Going home'), true, 'back to the default');
+    assert.equal((await db.myEvents(T, '59', { from: Y, to: Y })).find((e) => e.id === String(out.id)).note, null);
     assert.equal((await dayRow('59', Y)).totalMinutes, 390);
   });
 

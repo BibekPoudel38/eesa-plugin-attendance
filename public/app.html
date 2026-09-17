@@ -385,7 +385,6 @@
     .cell__title { display:block; font-size:17px; line-height:22px; }
     .cell__sub { display:block; font-size:15px; line-height:20px; letter-spacing:-.24px; color:var(--ios-2); }
     .cell__detail { color:var(--ios-2); font-variant-numeric:tabular-nums; white-space:nowrap; }
-    .cell__add { color:var(--primary); }
     .cell__label { flex:none; white-space:nowrap; }
     .cell__value { flex:1 1 auto; min-width:0; text-align:right; overflow:hidden; text-overflow:ellipsis; }
     .punches .cell__title { font-size:15px; line-height:20px; }
@@ -721,12 +720,15 @@
     // ==================== STAFF ====================
     // One page. The phone checks people in and out as they arrive and leave;
     // nobody does it by hand. What a person adds is why: why they came in, and
-    // why they went out. "Outside work" counts the time away until they are
-    // back, "Not for work" leaves a visit out, and anything else is a note.
+    // why they went out, and only when it isn't the usual: a check-in is Work
+    // and a check-out is Going home unless they say otherwise. "Outside work"
+    // counts the time away until they are back, "Not for work" leaves a visit
+    // out, and anything else is a note.
     const WHY = {
-      check_in: { label: 'Reason for coming in', question: 'Why did you come in?', reasons: ['Work', 'Not for work'], other: false },
-      check_out: { label: 'Reason for going out', question: 'Why did you go out?', reasons: ['Going home', 'Outside work'], other: true },
+      check_in: { label: 'Reason for coming in', question: 'Why did you come in?', usual: 'Work', changes: ['Not for work'], other: false },
+      check_out: { label: 'Reason for going out', question: 'Why did you go out?', usual: 'Going home', changes: ['Outside work'], other: true },
     };
+    const reasonOf = (e) => e.note || WHY[e.type].usual;
     const CHEV = '<svg class="chev" viewBox="0 0 8 13" aria-hidden="true"><path d="M1.5 1.5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     // "9:02 AM" on the restaurant's clock, in the phone's own format.
     const hm = (iso) => iso
@@ -844,10 +846,12 @@
 
       const askWhy = (e) => {
         const w = WHY[e.type];
+        // Only what it can change to: the usual is offered once something else was chosen.
+        const choices = [w.usual, ...w.changes].filter((r) => r !== reasonOf(e));
         const s = openSheet(`
           <div class="iaction" role="alertdialog" aria-modal="true" aria-labelledby="wt">
             <div class="ig"><div class="msg" id="wt">${w.question}</div>
-              ${w.reasons.map((r) => `<button type="button" data-r="${esc(r)}">${esc(r)}</button>`).join('')}
+              ${choices.map((r) => `<button type="button" data-r="${esc(r)}">${esc(r)}</button>`).join('')}
               ${w.other ? '<button type="button" data-other>Other…</button>' : ''}</div>
             <div class="ig"><button type="button" class="strong" data-x data-autofocus>Cancel</button></div>
           </div>`);
@@ -859,7 +863,7 @@
 
       const askOther = (e) => {
         const w = WHY[e.type];
-        const typed = e.note && !w.reasons.includes(e.note) ? e.note : '';
+        const typed = e.note && ![w.usual, ...w.changes].includes(e.note) ? e.note : '';
         const s = openSheet(`
           <div class="ialert" role="alertdialog" aria-modal="true" aria-labelledby="ot">
             <div class="ialert__body"><h3 id="ot">${w.label}</h3>
@@ -879,7 +883,7 @@
       // The reason row under a check-in or check-out.
       const reasonCell = (e, attrs) => `<button class="cell" type="button" ${attrs}>
           <span class="cell__label">${WHY[e.type].label}</span>
-          <span class="cell__detail cell__value${e.note ? '' : ' cell__add'}">${e.note ? esc(e.note) : 'Add'}</span>${CHEV}
+          <span class="cell__detail cell__value">${esc(reasonOf(e))}</span>${CHEV}
         </button>`;
 
       const paintNow = () => {
@@ -906,11 +910,11 @@
           </button>
           <div class="punches" id="mpd-${esc(r.date)}" hidden></div>`;
       };
-      // Reasons can still be given for today and yesterday.
+      // Reasons can still be changed for today and yesterday.
       const punchRow = (e, editable) => {
         const inner = `<span class="cell__main">
             <span class="cell__title">${e.type === 'check_in' ? 'Checked in' : 'Checked out'}</span>
-            ${e.note ? `<span class="cell__sub">${esc(e.note)}</span>` : editable ? '<span class="cell__sub cell__add">Add reason</span>' : ''}</span>
+            <span class="cell__sub">${esc(reasonOf(e))}</span></span>
           <span class="cell__detail">${hm(e.at)}</span>`;
         return editable ? `<button class="cell" type="button" data-punch="${esc(e.id)}">${inner}${CHEV}</button>` : `<div class="cell">${inner}</div>`;
       };

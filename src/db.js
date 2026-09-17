@@ -880,13 +880,19 @@ export function computeToday(
 
 /// Why someone came in or went out, written on a punch the phone made. Only
 /// their own punches from today or yesterday, and only the reason: the time
-/// stays exactly what the phone recorded.
+/// stays exactly what the phone recorded. Work and Going home are what a punch
+/// means when nothing is said, so choosing them stores nothing: a reason on
+/// record is always a change.
 export async function setMyReason(tenantId, employeeRef, eventId, reason) {
   await ensureSimplifyTables();
   const tz = await tenantTz(tenantId);
   const why = String(reason ?? '').trim().slice(0, 120) || null;
   const rows = await q(
-    `update events set note = $4
+    `update events
+        set note = case
+          when type = 'check_in' and lower($4::text) = 'work' then null
+          when type = 'check_out' and lower($4::text) = 'going home' then null
+          else $4::text end
       where tenant_id = $1 and employee_ref = $2 and id::text = $3
         and (at at time zone $5)::date >= (now() at time zone $5)::date - 1
       returning id, at`,
