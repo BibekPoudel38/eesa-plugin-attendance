@@ -18,20 +18,27 @@ export function startSummaries({ managerAudience }) {
   setInterval(tick, TICK_MS).unref?.();
 }
 
-export async function runDue(now, { managerAudience }) {
-  for (const t of await db.tenantsWithSettings()) {
+/// Claims a summary only once it is ready to send. Claiming first meant a
+/// database or roster hiccup between the claim and the send lost that day's
+/// summary for good (16 Sep: the pooler refused connections at 10:32). Now a
+/// failure leaves nothing claimed and the next minute tries again; the claim
+/// still guarantees two instances never both send.
+export async function runDue(now, { managerAudience, store = db, notify = notifyUsers }) {
+  for (const t of await store.tenantsWithSettings()) {
     for (const due of dueSummaries(now, t.timezone)) {
-      if (!(await db.claimSummary(t.tenantId, due.kind, due.periodKey))) continue;
       const from = due.kind === 'daily' ? due.day : due.from;
       const to = due.kind === 'daily' ? due.day : due.to;
-      const totals = rollUp(await db.listApprovals(t.tenantId, { from, to }));
+      const totals = rollUp(await store.listApprovals(t.tenantId, { from, to }));
       const msg = due.kind === 'daily'
         ? dailySummary(due.day, totals)
         : weeklySummary(due.from, due.to, totals);
-      if (!msg) continue;
+      // An empty day is a settled answer: claim it so it isn't recomputed all day.
+      if (!msg) { await store.claimSummary(t.tenantId, due.kind, due.periodKey); continue; }
+      // No managers may be a roster that failed to load — try again next minute.
       const managers = await managerAudience(t.tenantId);
       if (!managers.length) continue;
-      notifyUsers(t.tenantId, managers, {
+      if (!(await store.claimSummary(t.tenantId, due.kind, due.periodKey))) continue;
+      notify(t.tenantId, managers, {
         ...msg,
         type: MANAGER_TYPE,
         data: { employeeRef: 'team', summary: due.kind, from, to },
