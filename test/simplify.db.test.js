@@ -166,6 +166,37 @@ describe('simplified attendance on a real database', { skip }, () => {
     assert.ok(report.some((r) => r.employeeRef === '39'));
   });
 
+  test('registering zones at work does not end the shift (Jeeva, 6 Aug)', async () => {
+    const other = (await db.pool.query(
+      `insert into zones (tenant_id, name, center_lat, center_lng, radius_m) values ($1, 'Dinesh Catering', 33.83048, -117.98238, 16) returning id`,
+      [T],
+    )).rows[0].id;
+    await punch('45', 'check_in', zoned(D3, '12:33'));
+    const bogus = await punch('45', 'check_out', zoned(D3, '12:33'), { zoneId: other, lat: C.lat, lng: C.lng });
+    assert.equal(bogus.duplicate, true);
+    assert.equal(bogus.ignored, 'another_zone');
+    await punch('45', 'check_out', zoned(D3, '17:00'), { lat: C.lat + 0.003 });
+    const row = await dayRow('45', D3);
+    assert.equal(row.totalMinutes, 267);
+    assert.deepEqual(row.flags, []);
+    await settle();
+    const sig = await db.pool.query(
+      `select reason from presence_signals where tenant_id = $1 and employee_ref = '45'`, [T]);
+    assert.deepEqual(sig.rows.map((r) => r.reason), ['left_another_zone']);
+  });
+
+  test("a hand check-out is not 'left later' because of another zone's exit", async () => {
+    const other = (await db.pool.query(
+      `select id from zones where tenant_id = $1 and name = 'Dinesh Catering'`, [T])).rows[0].id;
+    await punch('46', 'check_in', zoned(D3, '09:00'));
+    await punch('46', 'check_out', zoned(D3, '10:00'), { source: 'banner' });
+    await punch('46', 'check_out', zoned(D3, '11:30'), { zoneId: other, lat: C.lat + 0.02 });
+    await settle();
+    const row = await dayRow('46', D3);
+    assert.deepEqual(row.flags, []);
+    assert.equal(row.leftZoneAt, null);
+  });
+
   test('a summary is sent once, however many times it is claimed', async () => {
     assert.equal(await db.claimSummary(T, 'daily', D2), true);
     assert.equal(await db.claimSummary(T, 'daily', D2), false);

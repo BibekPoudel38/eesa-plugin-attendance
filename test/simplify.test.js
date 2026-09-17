@@ -3,7 +3,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { verifyOut, assignShiftDays, correctionProblem, dayFlags, localDay } from '../src/db.js';
+import { verifyOut, assignShiftDays, correctionProblem, dayFlags, localDay, exitFromAnotherZone } from '../src/db.js';
 
 const LA = 'America/Los_Angeles';
 const H = 60 * 60 * 1000;
@@ -153,5 +153,31 @@ describe('what a manager is asked to fix', () => {
     assert.deepEqual(f.flags, ['changed']);
     assert.equal(f.needsFix, false);
     assert.equal(f.corrected, true);
+  });
+});
+
+describe('leaving a zone you are not in does not end the shift', () => {
+  const inAt = (zone) => ({ type: 'check_in', zone_id: zone });
+  test("Jeeva, 6 Aug: checked in at Chups Anaheim, phone says it left Dinesh Catering", () => {
+    assert.equal(exitFromAnotherZone(inAt('chups'), 'check_out', { zoneId: 'dinesh', source: 'geofence' }), true);
+  });
+  test('leaving the zone the shift is in still ends it', () => {
+    assert.equal(exitFromAnotherZone(inAt('chups'), 'check_out', { zoneId: 'chups', source: 'geofence' }), false);
+  });
+  test('a queued exit replayed later is judged the same way', () => {
+    assert.equal(exitFromAnotherZone(inAt('chups'), 'check_out', { zoneId: 'dinesh', source: 'replay' }), true);
+  });
+  test('a person checking out by hand is never second-guessed', () => {
+    assert.equal(exitFromAnotherZone(inAt('chups'), 'check_out', { zoneId: 'dinesh', source: 'banner' }), false);
+    assert.equal(exitFromAnotherZone(inAt('chups'), 'check_out', { zoneId: 'dinesh', source: 'manual' }), false);
+  });
+  test('without a zone on either side there is nothing to compare', () => {
+    assert.equal(exitFromAnotherZone(inAt(null), 'check_out', { zoneId: 'dinesh', source: 'geofence' }), false);
+    assert.equal(exitFromAnotherZone(inAt('chups'), 'check_out', { zoneId: null, source: 'geofence' }), false);
+  });
+  test('arrivals and already-ended shifts are not this rule', () => {
+    assert.equal(exitFromAnotherZone(inAt('chups'), 'check_in', { zoneId: 'dinesh', source: 'geofence' }), false);
+    assert.equal(exitFromAnotherZone({ type: 'check_out', zone_id: 'chups' }, 'check_out', { zoneId: 'dinesh', source: 'geofence' }), false);
+    assert.equal(exitFromAnotherZone(null, 'check_out', { zoneId: 'dinesh', source: 'geofence' }), false);
   });
 });

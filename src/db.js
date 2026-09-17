@@ -540,6 +540,19 @@ export async function tenantsWithSettings() {
   return rows.map((r) => ({ tenantId: r.tenant_id, timezone: r.timezone || 'UTC' }));
 }
 
+/// A departure the phone reported from a zone the shift is not in.
+///
+/// When a phone registers its zones, iOS reports every zone it is OUTSIDE as an
+/// exit, and the app sends each one as a check-out. Checked in at Chups Anaheim,
+/// "left Dinesh Catering" — 2 km away, never visited — ended Jeeva's shift three
+/// times on 6–7 Aug, each restarting 4–14 minutes later. Leaving somewhere you
+/// are not says nothing about the shift you are in.
+export function exitFromAnotherZone(last, type, { zoneId, source }) {
+  if (type !== 'check_out' || !PHONE_OBSERVED.has(String(source || 'geofence'))) return false;
+  if (!last || last.type !== 'check_in' || last.zone_id == null || zoneId == null) return false;
+  return String(last.zone_id) !== String(zoneId);
+}
+
 export function isNoOpPunch(last, type, { zoneId, forWork }, now = Date.now()) {
   if (type === 'check_in') {
     if (forWork === false) return false;           // a real state change
@@ -593,6 +606,14 @@ export async function recordEvent(
       });
     }
     return { id: null, type, at: iso(last && last.at), duplicate: true };
+  }
+  if (exitFromAnotherZone(last, type, { zoneId: zid, source })) {
+    notePresenceSignal(tenantId, employeeRef, {
+      type, zoneId: zid, lat: la, lng: ln, accuracyM: acc, source,
+      reason: 'left_another_zone',
+      at: Number.isFinite(happenedAt) ? new Date(happenedAt).toISOString() : null,
+    });
+    return { id: null, type, at: iso(last && last.at), duplicate: true, ignored: 'another_zone' };
   }
 
   // A fix that could not have happened does not get to move the clock.
@@ -1914,6 +1935,8 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
                  select max(s.at) as at from presence_signals s
                   where s.tenant_id = o.tenant_id and s.employee_ref = o.employee_ref
                     and s.type = 'check_out'
+                    -- the phone leaving THAT place, not a zone it was never in
+                    and (o.zone_id is null or s.zone_id is null or s.zone_id = o.zone_id)
                     and s.at > o.at and s.at < o.at + interval '12 hours'
                     and not exists (
                       select 1 from events n
