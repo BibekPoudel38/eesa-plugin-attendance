@@ -294,7 +294,6 @@
     .cell:hover { border-color:var(--primary); }
     .cell.none { background:transparent; color:var(--faint); }
     .cell.fix { background:var(--warn-weak); border-color:var(--warn); color:var(--warn); }
-    .cell.ok { background:var(--success-weak); border-color:transparent; color:var(--success); }
     .cell.open { border-color:var(--success); }
     .cell.open::before { content:''; display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--success); margin-right:4px; vertical-align:1px; }
     .cell:disabled { cursor:default; opacity:.35; border-color:transparent; }
@@ -556,6 +555,7 @@
           <div style="font-weight:650">${esc(kind)}${e.workType ? `<span class="tag">${esc(e.workType)}</span>` : ''} ${vbadge(e.verification, e.verificationReason)}</div>
           <div class="muted" style="font-size:.76rem;margin-top:3px">${whereText(e.location)}</div>
           <div class="muted" style="font-size:.72rem;margin-top:1px">${esc(SOURCE_LABEL[e.source] || e.source)}</div>
+          ${e.note ? `<div style="font-size:.78rem;margin-top:3px">Reason: ${esc(e.note)}</div>` : ''}
         </div>
       </div>`;
     };
@@ -815,7 +815,7 @@
     // than by which database table the screen happens to read:
     //
     //   Today       who is here right now, and where
-    //   Timesheets  what people worked -> approve it -> what they're owed
+    //   Timesheets  what people worked, and any day that needs a fix
     //   People      who is enrolled, as what, at what rate
     //   Setup       the things you configure once: zones, shifts, timezone
     //
@@ -926,7 +926,7 @@
       $('view').innerHTML = `
         ${needsFix ? `<div class="card needs">
           <h2>${ic('activity')} ${needsFix === 1 ? 'One day needs' : `${needsFix} days need`} a fix</h2>
-          <p class="lead">This week has ${needsFix === 1 ? 'a day' : 'days'} with a missing or doubtful time. Fix ${needsFix === 1 ? 'it' : 'them'} and the week can be approved in one tap.</p>
+          <p class="lead">This week has ${needsFix === 1 ? 'a day' : 'days'} with a missing or doubtful time. Tap ${needsFix === 1 ? 'it' : 'each one'} in Timesheets to put the times right.</p>
           <button class="btn primary" id="gofix">Open Timesheets</button>
         </div>` : ''}
 
@@ -1036,7 +1036,6 @@
           ...p,
           total: settled.reduce((n, d) => n + d.totalMinutes, 0),
           fix: list.filter((d) => d.needsFix).length,
-          toApprove: settled.filter((d) => d.approvalStatus !== 'approved').length,
           any: list.length > 0,
         };
       }).sort((x, y) => (y.any - x.any) || String(x.name).localeCompare(String(y.name)));
@@ -1048,13 +1047,10 @@
         if (d.open) return `<button class="cell open" ${attrs} title="At work now">${dur(d.totalMinutes)}</button>`;
         if (d.needsFix) return `<button class="cell fix" ${attrs} title="Needs a fix">${d.totalMinutes ? dur(d.totalMinutes) : 'Fix'}</button>`;
         const edited = d.corrected ? ' changed' : '';
-        if (d.approvalStatus === 'approved') return `<button class="cell ok${edited}" ${attrs} title="Approved${d.corrected ? ' · changed by a manager' : ''}">${dur(d.totalMinutes)}</button>`;
         return `<button class="cell${edited}" ${attrs} ${d.corrected ? 'title="Changed by a manager"' : ''}>${dur(d.totalMinutes)}</button>`;
       };
       const action = (p) => {
         if (p.fix) return `<span class="pill pending">Fix ${p.fix}</span>`;
-        if (p.toApprove) return `<button class="btn small primary" data-approve="${esc(p.ref)}">Approve week</button>`;
-        if (p.any) return `<span class="pill approved">Approved</span>`;
         return '';
       };
       const title = WEEK === 0 ? 'This week' : WEEK === -1 ? 'Last week' : `${-WEEK} weeks ago`;
@@ -1077,7 +1073,6 @@
         </div>
         <div class="legendrow">
           <span><i style="background:var(--warn-weak);border-color:var(--warn)"></i>Needs a fix</span>
-          <span><i style="background:var(--success-weak);border-color:transparent"></i>Approved</span>
           <span><i style="border-color:var(--success)"></i>At work now</span>
           <span>✎ Changed by a manager</span>
           <span>Tap any day to see or fix its times.</span>
@@ -1089,15 +1084,6 @@
       $('view').querySelectorAll('button.cell').forEach((b) => b.onclick = () => {
         const p = byRef.get(b.dataset.ref);
         openDay(p ? p.name : b.dataset.ref, b.dataset.ref, b.dataset.day, p && p.days[b.dataset.day]);
-      });
-      $('view').querySelectorAll('button[data-approve]').forEach((b) => b.onclick = async () => {
-        const p = people.find((x) => x.ref === b.dataset.approve);
-        b.disabled = true;
-        try {
-          const r = await api('/api/admin/approvals/week', { method: 'POST', body: { employeeRef: b.dataset.approve, from, to } });
-          toast(`Approved · ${p ? p.name : ''} · ${dur(r.totalMinutes)}`);
-          go('timesheets');
-        } catch (e) { b.disabled = false; toast(e.message, true); }
       });
     };
 

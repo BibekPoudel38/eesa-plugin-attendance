@@ -115,17 +115,26 @@ describe('simplified attendance on a real database', { skip }, () => {
     assert.deepEqual(r.flags, []);
   });
 
-  test('Approve week refuses while a day needs a fix, then approves', async () => {
-    const refused = await db.approveWeek(T, '41', D3, D2, '36');
-    assert.equal(refused.ok, false);
-    assert.deepEqual(refused.needsFix, [D3]);
-
+  test('a corrected day counts as corrected, with nothing left to approve', async () => {
     await db.setDayCorrection(T, '39', D2, { firstIn: zoned(D2, '09:26'), lastOut: zoned(D2, '17:17') }, '36');
-    const ok = await db.approveWeek(T, '39', D3, D2, '36');
-    assert.equal(ok.ok, true);
-    assert.equal(ok.approvedDays, 1);
-    assert.equal(ok.totalMinutes, 471);
-    assert.equal((await dayRow('39', D2)).approvalStatus, 'approved');
+    const row = await dayRow('39', D2);
+    assert.equal(row.totalMinutes, 471);
+    assert.deepEqual(row.flags, ['changed']);
+    assert.equal(row.needsFix, false);
+  });
+
+  test("a check-out with a reason stands, and isn't 'left later'", async () => {
+    await punch('47', 'check_in', zoned(D3, '09:00'));
+    await punch('47', 'check_out', zoned(D3, '10:00'), { source: 'banner', note: '  Left my keys at home  ' });
+    const exit = await punch('47', 'check_out', zoned(D3, '11:30'), { lat: C.lat + 0.003 });
+    assert.equal(exit.duplicate, true);
+    await settle();
+    const row = await dayRow('47', D3);
+    assert.equal(row.totalMinutes, 60);
+    assert.deepEqual(row.flags, []);
+    const log = await db.eventLog(T, { employeeRef: '47', from: D3, to: D3 });
+    assert.equal(log.find((e) => e.type === 'check_out').note, 'Left my keys at home');
+    assert.equal(log.find((e) => e.type === 'check_in').note, null);
   });
 
   test('someone on the clock right now reads as open, on the day their shift began', async () => {

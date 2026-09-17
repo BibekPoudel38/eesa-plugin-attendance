@@ -446,6 +446,8 @@ export async function ensureSimplifyTables() {
       sent_at timestamptz not null default now(),
       primary key (tenant_id, kind, period_key)
     )`);
+    // Why somebody checked out or back in by hand ("Left my keys at home").
+    await pool.query(`alter table events add column if not exists note text`);
     return true;
   })().catch((e) => {
     _simplifyReady = null; // try again next time rather than caching a failure
@@ -572,8 +574,10 @@ export async function recordEvent(
   tenantId, employeeRef, type,
   { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true,
     source = 'geofence', workType = null, requireConfirm = false,
-    at = null } = {},
+    at = null, note = null } = {},
 ) {
+  await ensureSimplifyTables();
+  const why = note == null ? null : String(note).trim().slice(0, 200) || null;
   const la = coord(lat, 90);
   const ln = coord(lng, 180);
   // '' is not a uuid — a client clocking out away from a zone must land as a
@@ -641,18 +645,18 @@ export async function recordEvent(
   const hasConfirm = await ensureSettingsColumn();
   const rows = hasConfirm
     ? await q(
-        `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, accuracy_m, for_work, source, work_type, confirm_status, at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, coalesce($12::timestamptz, now())) returning id, type, at`,
+        `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, accuracy_m, for_work, source, work_type, confirm_status, at, note)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, coalesce($12::timestamptz, now()), $13) returning id, type, at`,
         [tenantId, employeeRef, type, zid, la, ln, acc, forWork !== false,
          String(source || 'geofence'), workType ? String(workType).slice(0, 120) : null, pending,
-         at],
+         at, why],
       )
     : await q(
-        `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, accuracy_m, for_work, source, work_type, at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, coalesce($11::timestamptz, now())) returning id, type, at`,
+        `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, accuracy_m, for_work, source, work_type, at, note)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, coalesce($11::timestamptz, now()), $12) returning id, type, at`,
         [tenantId, employeeRef, type, zid, la, ln, acc, forWork !== false,
          String(source || 'geofence'), workType ? String(workType).slice(0, 120) : null,
-         at],
+         at, why],
       );
   await upsertDaySummary(tenantId, employeeRef, await shiftDayOfEvent(tenantId, employeeRef, rows[0].id, rows[0].at));
   // Gated on hasConfirm, not just on the request. If the DDL never landed (no
@@ -702,10 +706,11 @@ export function assignShiftDays(events, tz, { sameShiftMs = SAME_PRESENCE_MS } =
 /// A day's punches by shift, not by clock: everything whose shift started that
 /// day, including a departure that landed after midnight.
 async function shiftEvents(tenantId, employeeRef, day) {
+  await ensureSimplifyTables();
   const tz = await tenantTz(tenantId);
   const rows = await q(
     `select e.id, e.employee_ref, e.type, e.zone_id, e.at, e.for_work, e.source,
-            e.work_type, e.lat, e.lng, e.accuracy_m,
+            e.work_type, e.lat, e.lng, e.accuracy_m, e.note,
             z.name as zone_name, z.center_lat, z.center_lng, z.radius_m,
             '' as name, (e.at at time zone $3)::date as day
        from events e
@@ -1176,6 +1181,7 @@ export async function presence(tenantId) {
 export async function eventLog(
   tenantId, { employeeRef = null, from = null, to = null, limit = 500 } = {},
 ) {
+  await ensureSimplifyTables();
   const tz = await tenantTz(tenantId);
   const params = [tenantId, tz];
   const clauses = ['e.tenant_id = $1'];
@@ -1191,7 +1197,7 @@ export async function eventLog(
   params.push(Math.max(1, Math.min(Number(limit) || 500, 2000)));
   const rows = await q(
     `select e.id, e.employee_ref, e.type, e.at, e.source, e.work_type, e.for_work,
-            e.lat, e.lng, e.accuracy_m, e.zone_id,
+            e.lat, e.lng, e.accuracy_m, e.zone_id, e.note,
             z.name as zone_name, z.center_lat, z.center_lng, z.radius_m,
             coalesce(m.name, '') as name,
             (e.at at time zone $2)::date as day
@@ -1220,6 +1226,7 @@ const eventOut = (r) => {
     source: r.source || 'geofence',
     workType: r.work_type || null,
     forWork: r.for_work !== false,
+    note: r.note || null,
     location,
     verification: v.state,          // 'verified' | 'outside' | 'unverified'
     verificationReason: v.reason,
@@ -1230,6 +1237,7 @@ const eventOut = (r) => {
 // anyone else's. This is what lets someone see an unverified punch of theirs
 // and understand why it is marked that way instead of just finding it missing.
 export async function myEvents(tenantId, employeeRef, { from = null, to = null, days = null } = {}) {
+  await ensureSimplifyTables();
   const tz = await tenantTz(tenantId);
   const params = [tenantId, tz, employeeRef];
   const clauses = ['e.tenant_id = $1', 'e.employee_ref = $3'];
@@ -1251,7 +1259,7 @@ export async function myEvents(tenantId, employeeRef, { from = null, to = null, 
   }
   const rows = await q(
     `select e.id, e.employee_ref, e.type, e.at, e.source, e.work_type, e.for_work,
-            e.lat, e.lng, e.accuracy_m, e.zone_id,
+            e.lat, e.lng, e.accuracy_m, e.zone_id, e.note,
             z.name as zone_name, z.center_lat, z.center_lng, z.radius_m,
             '' as name, (e.at at time zone $2)::date as day
        from events e
@@ -1946,6 +1954,8 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
                ) sig on sig.at is not null
               where o.tenant_id = ds.tenant_id and o.employee_ref = ds.employee_ref
                 and o.type = 'check_out' and o.source in ('banner', 'manual')
+                -- one with a reason was meant ("Left my keys at home"): it stands
+                and o.note is null
                 and ds.first_in is not null
                 and o.at between ds.first_in and coalesce(ds.last_out, now())
             ) as hand_outs
@@ -2048,25 +2058,6 @@ export function dayFlags(r, { now = Date.now(), sameShiftMs = SAME_PRESENCE_MS }
     // The phone's word on when they really left, for the Fix times sheet.
     handOuts: corrected ? [] : handOuts,
     leftZoneAt: !corrected && handOuts.length ? handOuts[handOuts.length - 1].leftZoneAt : null,
-  };
-}
-
-/// Approve a person's week in one go. Refuses while any day in it still needs
-/// a fix — pay should not go out on a number with a known hole in it — and
-/// leaves a shift that is still running for next time.
-export async function approveWeek(tenantId, employeeRef, from, to, approvedBy) {
-  const days = (await listApprovals(tenantId, { from, to }))
-    .filter((d) => String(d.employeeRef) === String(employeeRef));
-  const needsFix = days.filter((d) => d.needsFix);
-  if (needsFix.length) return { ok: false, needsFix: needsFix.map((d) => d.day) };
-  const toApprove = days.filter((d) => !d.open && d.approvalStatus !== 'approved');
-  for (const d of toApprove) await setApproval(tenantId, employeeRef, d.day, 'approved', approvedBy);
-  const settled = days.filter((d) => !d.open);
-  return {
-    ok: true,
-    approvedDays: toApprove.length,
-    days: settled.length,
-    totalMinutes: settled.reduce((n, d) => n + d.totalMinutes, 0),
   };
 }
 

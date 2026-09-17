@@ -92,22 +92,13 @@ export function dailySummary(day, { people, minutes, needsFix }) {
   };
 }
 
-/// Monday's line: last week is ready to approve, or what stands in the way.
+/// Monday's line: last week's hours, and anything that still looks wrong.
+/// Nobody approves hours any more — they count as recorded.
 export function weeklySummary(from, to, { people, minutes, needsFix }) {
   if (!people && !needsFix) return null;
-  const next = needsFix
-    ? `fix ${plural(needsFix, 'day', 'days')} before approving`
-    : 'ready to approve';
+  const fix = needsFix ? `${plural(needsFix, 'day needs', 'days need')} a fix` : 'all look right';
   return {
-    title: `Timesheets for ${rangeLabel(from, to)}`,
-    body: `${plural(people, 'person', 'people')} · ${spanOf(minutes)} · ${next}`,
-  };
-}
-
-/// What a staff member hears once their week is approved.
-export function weekApprovedMessage(from, to, minutes) {
-  return {
-    title: `Your hours for ${rangeLabel(from, to)}`,
-    body: `${spanOf(minutes)} · approved`,
+    title: `Hours for ${rangeLabel(from, to)}`,
+    body: `${plural(people, 'person', 'people')} · ${spanOf(minutes)} · ${fix}`,
   };
 }

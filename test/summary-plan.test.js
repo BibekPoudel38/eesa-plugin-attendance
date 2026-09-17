@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 
 import {
   spanOf, addDays, dayLabel, rangeLabel, dueSummaries, rollUp,
-  dailySummary, weeklySummary, weekApprovedMessage,
+  dailySummary, weeklySummary,
 } from '../src/summary_plan.js';
 
 const LA = 'America/Los_Angeles';
@@ -56,20 +56,16 @@ describe('the words', () => {
     assert.match(msg.body, /1 day needs a fix/);
   });
 
-  test("Monday's timesheets", () => {
+  test("Monday's hours — nothing to approve, only what looks wrong", () => {
     const msg = weeklySummary('2026-09-14', '2026-09-20', rollUp([day('1', 2400), day('2', 1800, { needsFix: true })]));
-    assert.equal(msg.title, 'Timesheets for 14–20 Sep');
-    assert.equal(msg.body, '2 people · 70h 00m · fix 1 day before approving');
+    assert.equal(msg.title, 'Hours for 14–20 Sep');
+    assert.equal(msg.body, '2 people · 70h 00m · 1 day needs a fix');
+    assert.doesNotMatch(msg.body, /approv/);
+    assert.match(weeklySummary('2026-09-14', '2026-09-20', rollUp([day('1', 2400)])).body, /all look right$/);
   });
 
   test('a week across two months', () => {
     assert.equal(rangeLabel('2026-09-28', '2026-10-04'), '28 Sep – 4 Oct');
-  });
-
-  test('staff hear their week once', () => {
-    const msg = weekApprovedMessage('2026-09-14', '2026-09-20', 2300);
-    assert.equal(msg.title, 'Your hours for 14–20 Sep');
-    assert.equal(msg.body, '38h 20m · approved');
   });
 
   test('helpers', () => {

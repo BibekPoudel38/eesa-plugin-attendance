@@ -17,7 +17,7 @@ import { telemetry, flush as flushTelemetry } from './telemetry.js';
 import { notifyUser, notifyUsers } from './notify.js';
 import { recordEvent } from './telemetry.js';
 import { startSummaries } from './summaries.js';
-import { spanOf, weekApprovedMessage } from './summary_plan.js';
+import { spanOf } from './summary_plan.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANIFEST = JSON.parse(readFileSync(join(__dirname, '..', 'manifest.json'), 'utf-8'));
@@ -430,11 +430,11 @@ function punchOutcome(ev) {
 
 // ---- Employee REST hot path (Flutter) — any enrolled user -----------------
 app.post('/api/checkIn', emp, async (req, res) => {
-  const { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true, source = 'geofence', workType = null, clientAt = null } = req.body || {};
+  const { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true, source = 'geofence', workType = null, clientAt = null, note = null } = req.body || {};
   // No arrival is held for a manager's word any more. "Is X here?" was answered
   // once in eight, and the phone crossing the zone is already the evidence.
   const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', {
-    zoneId, lat, lng, accuracyM, forWork, source, workType,
+    zoneId, lat, lng, accuracyM, forWork, source, workType, note,
     at: db.punchedAt(clientAt),
   });
   const status = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
@@ -450,9 +450,9 @@ app.post('/api/checkIn', emp, async (req, res) => {
   res.json({ ok: true, data: { ...status, punch: punchOutcome(ev) } });
 });
 app.post('/api/checkOut', emp, async (req, res) => {
-  const { zoneId = null, lat = null, lng = null, accuracyM = null, source = 'geofence', clientAt = null } = req.body || {};
+  const { zoneId = null, lat = null, lng = null, accuracyM = null, source = 'geofence', clientAt = null, note = null } = req.body || {};
   const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', {
-    zoneId, lat, lng, accuracyM, source, at: db.punchedAt(clientAt),
+    zoneId, lat, lng, accuracyM, source, note, at: db.punchedAt(clientAt),
   });
   const status = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
   if (ev.ignored) noteRefusedPunch(req.ctx.tenantId, req.ctx.sub, 'check_out', ev);
@@ -700,31 +700,7 @@ app.post('/api/admin/approvals', manager, async (req, res) => {
   if (!result.updated) {
     return res.status(404).json({ ok: false, error: { code: 'NO_TIMESHEET', message: 'No attendance recorded for that day.' } });
   }
-  // No push per day. Staff hear once, when their week is approved.
-  res.json({ ok: true, data: result });
-});
-
-// Approve a person's week in one tap. Refused while a day still needs a fix.
-app.post('/api/admin/approvals/week', manager, async (req, res) => {
-  const { employeeRef, from, to } = req.body || {};
-  if (!employeeRef || !from || !to) {
-    return res.status(400).json({ ok: false, error: { code: 'BAD_REQUEST', message: 'employeeRef, from and to are required.' } });
-  }
-  const result = await db.approveWeek(req.ctx.tenantId, employeeRef, from, to, req.ctx.sub);
-  if (!result.ok) {
-    return res.status(409).json({ ok: false, error: {
-      code: 'NEEDS_FIX',
-      message: `Fix ${result.needsFix.length === 1 ? 'the day' : `${result.needsFix.length} days`} first.`,
-      days: result.needsFix,
-    } });
-  }
-  if (result.approvedDays > 0) {
-    const msg = weekApprovedMessage(from, to, result.totalMinutes);
-    // A staff-kind type with no employeeRef opens their own hours in the app.
-    notifyUser(req.ctx.tenantId, employeeRef, {
-      ...msg, type: 'attendance_check_out', data: { summary: 'week', from, to },
-    });
-  }
+  // Kept for the 1.33 app's Attendance tab; nothing new asks for approval.
   res.json({ ok: true, data: result });
 });
 

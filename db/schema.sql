@@ -230,3 +230,6 @@ create table if not exists sent_summaries (
   sent_at timestamptz not null default now(),
   primary key (tenant_id, kind, period_key)
 );
+
+-- Why somebody checked out or back in by hand ("Left my keys at home").
+alter table events add column if not exists note text;
