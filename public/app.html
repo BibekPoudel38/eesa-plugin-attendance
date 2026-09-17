@@ -336,58 +336,112 @@
     .periods button:hover { color:var(--ink); }
     .periods button.active { background:var(--primary); color:var(--primary-ink); }
     .periods button:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
-    /* ---- Staff: one quiet page ----
-       The app bar above already says Attendance, so the page keeps no header
-       or tabs of its own. */
+    /* ---- Staff: one page, built the way iOS builds its own ----
+       Inset grouped lists on the grouped background, the system type scale and
+       colours, a segmented control, and a sheet for each question. The app bar
+       above already says Attendance, so the page keeps no header or tabs. */
+    :root {
+      --ios-bg:#F2F2F7; --ios-cell:#FFFFFF; --ios-press:#D1D1D6; --ios-sep:rgba(60,60,67,.29);
+      --ios-label:#000000; --ios-2:rgba(60,60,67,.6); --ios-3:rgba(60,60,67,.3);
+      --ios-fill:rgba(118,118,128,.12); --ios-seg:#FFFFFF; --ios-scrim:rgba(0,0,0,.4);
+      --ios-green:#34C759; --ios-orange:#FF9500; --ios-red:#FF3B30;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --ios-bg:#000000; --ios-cell:#1C1C1E; --ios-press:#3A3A3C; --ios-sep:rgba(84,84,88,.65);
+        --ios-label:#FFFFFF; --ios-2:rgba(235,235,245,.6); --ios-3:rgba(235,235,245,.3);
+        --ios-fill:rgba(118,118,128,.24); --ios-seg:#636366; --ios-scrim:rgba(0,0,0,.6);
+        --ios-green:#30D158; --ios-orange:#FF9F0A; --ios-red:#FF453A;
+      }
+    }
+    :root[data-theme="dark"] {
+      --ios-bg:#000000; --ios-cell:#1C1C1E; --ios-press:#3A3A3C; --ios-sep:rgba(84,84,88,.65);
+      --ios-label:#FFFFFF; --ios-2:rgba(235,235,245,.6); --ios-3:rgba(235,235,245,.3);
+      --ios-fill:rgba(118,118,128,.24); --ios-seg:#636366; --ios-scrim:rgba(0,0,0,.6);
+      --ios-green:#30D158; --ios-orange:#FF9F0A; --ios-red:#FF453A;
+    }
+    body.staff {
+      background:var(--ios-bg); color:var(--ios-label);
+      font-family:-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+      font-size:17px; letter-spacing:-.41px; -webkit-tap-highlight-color:transparent;
+    }
     body.staff header, body.staff nav { display:none; }
-    body.staff main { max-width:560px; padding-top:16px; }
-    .now__row { display:flex; align-items:center; gap:10px; }
-    .now__dot { width:10px; height:10px; border-radius:50%; flex:none; background:var(--faint); }
-    .now--in .now__dot { background:var(--success); }
-    .now--out .now__dot { background:var(--warn); }
-    .now__state { font-size:1.05rem; font-weight:700; letter-spacing:-.01em; }
-    .now__line { color:var(--muted); font-size:.86rem; margin:3px 0 0 20px; }
-    .now__act { margin-top:14px; }
-    .btn.block { width:100%; justify-content:center; padding:11px 14px; }
-    .btn:disabled { opacity:.5; cursor:default; }
-    .btn:disabled:hover { border-color:var(--line); }
-    .goout { display:grid; gap:10px; padding-top:14px; border-top:1px solid var(--line); }
-    .goout__q { font-weight:650; font-size:.9rem; }
-    .reasons { display:flex; flex-wrap:wrap; gap:8px; }
-    .reason {
-      font:inherit; font-size:.82rem; padding:7px 12px; border-radius:999px; cursor:pointer;
-      border:1px solid var(--line); background:var(--card-2); color:var(--ink);
+    body.staff main { max-width:560px; padding:20px 16px 40px; }
+    .ig { background:var(--ios-cell); border-radius:12px; overflow:hidden; margin:0 0 22px; }
+    .cell {
+      position:relative; display:flex; align-items:center; gap:12px; width:100%; min-height:44px;
+      padding:11px 16px; margin:0; font:inherit; color:inherit; text-align:left; background:none; border:0;
     }
-    .reason.on { background:var(--primary-weak); border-color:var(--primary); color:var(--primary); font-weight:650; }
-    .hint { color:var(--muted); font-size:.8rem; margin:0; line-height:1.4; }
-    .hint.pad { padding:12px 2px; }
-    .acts { display:flex; gap:8px; justify-content:flex-end; align-items:center; }
-    .acts .btn.link, .acts .hint { margin-right:auto; }
-    .acts .btn.link { padding-left:0; }
-    .tiles { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:14px; }
-    .tile { background:var(--card); border:1px solid var(--line); border-radius:var(--radius-sm); padding:12px; box-shadow:var(--shadow); }
-    .tile__n { font-size:1.15rem; font-weight:750; letter-spacing:-.01em; font-variant-numeric:tabular-nums; }
-    .tile__l { font-size:.74rem; color:var(--muted); margin-top:2px; }
-    .dates { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:4px 0 6px; }
-    .dates .field input { width:100%; }
-    /* Four periods on one line at phone width, "Dates" included. */
-    body.staff .periods button { padding:7px 6px; }
-    .rangehead { display:flex; justify-content:space-between; align-items:baseline; gap:8px; margin:8px 2px 2px; font-size:.8rem; color:var(--muted); }
-    .rangehead b { color:var(--ink); font-variant-numeric:tabular-nums; }
-    .day {
-      font:inherit; color:inherit; background:none; border:0; border-bottom:1px solid var(--line);
-      width:100%; text-align:left; cursor:pointer; padding:12px 2px;
-      display:grid; grid-template-columns:1fr auto; column-gap:12px; row-gap:2px; align-items:center;
+    .ig > .cell + .cell::before, .ig > .punches + .cell::before, .punches > .cell::before {
+      content:''; position:absolute; top:0; left:16px; right:0; height:.5px; background:var(--ios-sep);
     }
-    .day__d { font-weight:650; font-size:.9rem; }
-    .day__t { grid-column:1; color:var(--muted); font-size:.8rem; font-variant-numeric:tabular-nums; }
-    .day__m { grid-column:2; grid-row:1 / 3; font-weight:700; font-variant-numeric:tabular-nums; }
-    .day:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; border-radius:8px; }
-    .punches { padding:6px 2px 10px; border-bottom:1px solid var(--line); }
-    #mdays > .day:nth-last-child(2):has(+ .punches[hidden]), #mdays > .punches:last-child { border-bottom:0; }
-    .punch { display:grid; grid-template-columns:72px 1fr; gap:10px; padding:4px 0; font-size:.84rem; }
-    .punch__t { color:var(--muted); font-variant-numeric:tabular-nums; }
-    .punch__r { display:block; color:var(--muted); font-size:.78rem; }
+    .punches > .cell { padding-left:32px; }
+    .punches > .cell::before { left:32px; }
+    button.cell { cursor:pointer; }
+    button.cell:active { background:var(--ios-press); }
+    button.cell:disabled { opacity:.5; cursor:default; }
+    .cell:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
+    .cell__main { flex:1; min-width:0; }
+    .cell__title { display:block; font-size:17px; line-height:22px; }
+    .cell__sub { display:block; font-size:15px; line-height:20px; letter-spacing:-.24px; color:var(--ios-2); }
+    .cell__detail { color:var(--ios-2); font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .cell--action { color:var(--primary); }
+    .punches .cell__title { font-size:15px; line-height:20px; }
+    .chev { width:8px; height:13px; flex:none; color:var(--ios-3); transition:transform .2s; }
+    [aria-expanded="true"] > .chev { transform:rotate(90deg); }
+    .state { font-weight:600; }
+    .dot { width:10px; height:10px; border-radius:50%; flex:none; background:var(--ios-3); }
+    .dot--in { background:var(--ios-green); }
+    .dot--out { background:var(--ios-orange); }
+    .sum { display:grid; grid-template-columns:repeat(3, 1fr); }
+    .sum > div { position:relative; padding:10px 12px 12px; }
+    .sum > div + div::before { content:''; position:absolute; left:0; top:12px; bottom:12px; width:.5px; background:var(--ios-sep); }
+    .sum__l { font-size:13px; letter-spacing:-.08px; color:var(--ios-2); }
+    .sum__n { margin-top:2px; font-family:ui-rounded, -apple-system, system-ui, sans-serif; font-size:22px; font-weight:700; letter-spacing:.35px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .seg { display:grid; grid-auto-flow:column; grid-auto-columns:1fr; padding:2px; margin:0 0 22px; border-radius:9px; background:var(--ios-fill); }
+    .seg button {
+      font:inherit; font-size:13px; font-weight:500; letter-spacing:-.08px; white-space:nowrap;
+      color:var(--ios-label); background:none; border:0; border-radius:7px; padding:6px 2px; cursor:pointer;
+    }
+    .seg button.active { background:var(--ios-seg); font-weight:600; box-shadow:0 3px 8px rgba(0,0,0,.12), 0 3px 1px rgba(0,0,0,.04); }
+    .seg button:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
+    .ihead { display:flex; justify-content:space-between; gap:8px; padding:0 16px 7px; font-size:13px; letter-spacing:-.08px; color:var(--ios-2); }
+    .ihead span:first-child { text-transform:uppercase; }
+    .ifoot { margin:-15px 0 22px; padding:0 16px; font-size:13px; letter-spacing:-.08px; color:var(--ios-2); }
+    body.staff .cell input {
+      font:inherit; font-size:17px; color:var(--ios-label); background:none; border:0; border-radius:0;
+      padding:0; width:100%; box-shadow:none;
+    }
+    body.staff .cell input.when {
+      -webkit-appearance:none; appearance:none; width:auto; min-width:0; background:var(--ios-fill);
+      border-radius:6px; padding:6px 11px; font-variant-numeric:tabular-nums;
+    }
+    /* Sheets: a page sheet for a choice, an action sheet for a yes or no. */
+    .iback { position:fixed; inset:0; z-index:60; display:flex; align-items:flex-end; justify-content:center; background:var(--ios-scrim); animation:ifade .2s ease; }
+    .isheet {
+      width:100%; max-width:560px; max-height:92vh; overflow:auto; background:var(--ios-bg);
+      border-radius:12px 12px 0 0; padding:6px 16px calc(24px + env(safe-area-inset-bottom, 0px));
+      animation:iup .3s cubic-bezier(.2,.8,.2,1);
+    }
+    .grab { width:36px; height:5px; border-radius:3px; margin:0 auto 4px; background:var(--ios-3); }
+    .inav { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; min-height:44px; margin:0 0 12px; }
+    .inav h3 { margin:0; font-size:17px; font-weight:600; }
+    .inav button { justify-self:start; font:inherit; font-size:17px; color:var(--primary); background:none; border:0; padding:8px 0; cursor:pointer; }
+    .inav button:last-child { justify-self:end; font-weight:600; }
+    .inav button:disabled { color:var(--ios-3); cursor:default; }
+    .check { width:17px; height:17px; flex:none; color:var(--primary); visibility:hidden; }
+    [aria-checked="true"] > .check { visibility:visible; }
+    .iaction { width:100%; max-width:560px; padding:0 8px calc(8px + env(safe-area-inset-bottom, 0px)); animation:iup .3s cubic-bezier(.2,.8,.2,1); }
+    .iaction .ig { margin:0 0 8px; border-radius:14px; }
+    .iaction .msg { padding:14px 16px; text-align:center; font-size:13px; letter-spacing:-.08px; color:var(--ios-2); }
+    .iaction button { position:relative; display:block; width:100%; min-height:57px; font:inherit; font-size:20px; color:var(--primary); background:none; border:0; cursor:pointer; }
+    .iaction .msg + button::before { content:''; position:absolute; top:0; left:0; right:0; height:.5px; background:var(--ios-sep); }
+    .iaction button:active { background:var(--ios-press); }
+    .iaction .danger { color:var(--ios-red); }
+    .iaction .strong { font-weight:600; }
+    @keyframes iup { from { transform:translateY(100%); } to { transform:none; } }
+    @keyframes ifade { from { opacity:0; } to { opacity:1; } }
+    @media (prefers-reduced-motion: reduce) { .iback, .isheet, .iaction { animation:none; } .chev { transition:none; } }
     .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
     .toolbar input[type="search"], .toolbar input.search { flex:1; min-width:180px; }
     .toolbar select { width:auto; min-width:120px; }
@@ -665,23 +719,61 @@
     // One page, in the order the questions come: am I at work, I'm going out on
     // an errand, and how many hours have I done. Arriving and leaving record
     // themselves, so nothing here starts a shift. The one way to end one is
-    // "Done for the day" while out on an errand, when no phone is at work to see
+    // "Done for the Day" while out on an errand, when no phone is at work to see
     // the person leave.
     const ERRANDS = ['Buying groceries', 'Meeting a customer', 'Delivery', 'Bank'];
-    // "9:02 AM" on the restaurant's clock.
+    const CHEV = '<svg class="chev" viewBox="0 0 8 13" aria-hidden="true"><path d="M1.5 1.5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    const CHECK = '<svg class="check" viewBox="0 0 17 17" aria-hidden="true"><path d="M2.5 9l4 4 8-9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    // "9:02 AM" on the restaurant's clock, in the phone's own format.
     const hm = (iso) => iso
       ? new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', ...(TZ ? { timeZone: TZ } : {}) })
       : '—';
+    // Hours as a stat: "0m" rather than a dash.
+    const span = (m) => (Math.round(Number(m || 0)) ? dur(m) : '0m');
+    // "Thu, Sep 17" and "Sep 14 – 17", as the phone's locale writes them.
+    const utcDay = (d) => { const [y, m, dd] = ymdParts(d); return new Date(Date.UTC(y, m - 1, dd)); };
+    const DAY_FMT = new Intl.DateTimeFormat([], { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+    const SPAN_FMT = new Intl.DateTimeFormat([], { month: 'short', day: 'numeric', timeZone: 'UTC' });
+    const dayName = (d) => DAY_FMT.format(utcDay(d));
+    const rangeName = (f, t) => (f === t ? dayName(f)
+      : SPAN_FMT.formatRange ? SPAN_FMT.formatRange(utcDay(f), utcDay(t))
+      : `${SPAN_FMT.format(utcDay(f))} – ${SPAN_FMT.format(utcDay(t))}`);
+
     const MINE = { period: 'week', from: null, to: null, seq: 0, refresh: null };
     const MINE_PERIODS = {
-      week: ['This week', () => [weekRange(0)[0], todayTZ()]],
-      last: ['Last week', () => weekRange(-1)],
-      month: ['This month', () => { const t = todayTZ(); return [t.slice(0, 8) + '01', t]; }],
-      custom: ['Dates', () => [MINE.from, MINE.to]],
+      week: ['This Week', () => [weekRange(0)[0], todayTZ()]],
+      last: ['Last Week', () => weekRange(-1)],
+      month: ['This Month', () => { const t = todayTZ(); return [t.slice(0, 8) + '01', t]; }],
+      custom: ['Custom', () => [MINE.from, MINE.to]],
     };
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && TAB === 'me' && MINE.refresh) MINE.refresh();
     });
+
+    // A sheet over the page, the way iOS asks: Escape or a tap outside closes
+    // it, the page behind stays put, and focus goes back where it came from.
+    function openSheet(html) {
+      const opener = document.activeElement;
+      const back = document.createElement('div');
+      back.className = 'iback';
+      back.innerHTML = html;
+      document.body.appendChild(back);
+      document.body.style.overflow = 'hidden';
+      let downOnBack = false;
+      back.addEventListener('pointerdown', (e) => { downOnBack = e.target === back; });
+      back.addEventListener('click', (e) => { if (downOnBack && e.target === back) close(); });
+      const onKey = (e) => { if (e.key === 'Escape') close(); };
+      document.addEventListener('keydown', onKey);
+      function close() {
+        document.removeEventListener('keydown', onKey);
+        back.remove();
+        document.body.style.overflow = '';
+        if (opener && opener.isConnected) opener.focus({ preventScroll: true });
+      }
+      const first = back.querySelector('[data-autofocus]');
+      if (first) first.focus({ preventScroll: true });
+      return { el: back, close };
+    }
 
     VIEWS.me = async () => {
       let st = await api('/api/getMyStatus');
@@ -699,152 +791,156 @@
       // The server counted the open shift up to the moment it answered; only the
       // minutes since then are added here.
       let readAt = Date.now();
-      let asking = null; // null | 'errand' | 'end'
       const todayNow = () => Number(st.todayMinutes || 0) + (st.checkedIn ? Math.floor((Date.now() - readAt) / 60000) : 0);
 
       $('view').innerHTML = `
-        <section class="card now" id="mnow"></section>
-        <div class="tiles">
-          <div class="tile"><div class="tile__n" id="mtoday"></div><div class="tile__l">Today</div></div>
-          <div class="tile"><div class="tile__n">${dur(minutesOn(yesterday))}</div><div class="tile__l">Yesterday</div></div>
-          <div class="tile"><div class="tile__n" id="mweek"></div><div class="tile__l">This week</div></div>
+        <div class="ig" id="mnow"></div>
+        <div class="ig sum">
+          <div><div class="sum__l">Today</div><div class="sum__n" id="mtoday"></div></div>
+          <div><div class="sum__l">Yesterday</div><div class="sum__n">${span(minutesOn(yesterday))}</div></div>
+          <div><div class="sum__l">This Week</div><div class="sum__n" id="mweek"></div></div>
         </div>
-        <section class="card">
-          <div class="periods" id="mp">${Object.entries(MINE_PERIODS).map(([k, [label]]) =>
-            `<button type="button" data-p="${k}">${k === 'custom' ? `${ic('calendar')} ` : ''}${label}</button>`).join('')}</div>
-          <div class="dates" id="mdates" hidden>
-            <label class="field">From<input type="date" id="mfrom"></label>
-            <label class="field">To<input type="date" id="mto"></label>
-          </div>
-          <div class="rangehead"><span id="mrange"></span><b id="msum"></b></div>
-          <div id="mdays"></div>
-        </section>`;
+        <div class="seg" id="mp" role="tablist" aria-label="Period">${Object.entries(MINE_PERIODS).map(([k, [label]]) =>
+          `<button type="button" role="tab" data-p="${k}">${label}</button>`).join('')}</div>
+        <div class="ig" id="mdates" hidden>
+          <label class="cell"><span class="cell__main">From</span><input class="when" type="date" id="mfrom"></label>
+          <label class="cell"><span class="cell__main">To</span><input class="when" type="date" id="mto"></label>
+        </div>
+        <div class="ihead"><span id="mrange"></span><span id="msum"></span></div>
+        <div class="ig" id="mdays"></div>`;
 
       const totals = () => {
         if (!$('mtoday')) return;
-        $('mtoday').textContent = dur(todayNow());
-        $('mweek').textContent = dur(earlierThisWeek + todayNow());
+        $('mtoday').textContent = span(todayNow());
+        $('mweek').textContent = span(earlierThisWeek + todayNow());
       };
-      const adopt = (next) => { st = next; readAt = Date.now(); asking = null; paintNow(); totals(); };
-      // The button says it is working, and gets its label back if the request
-      // fails, so the person can try again.
-      const busy = async (btn, label, work) => {
-        const was = btn.innerHTML;
-        btn.disabled = true; btn.textContent = label;
+      const adopt = (next) => { st = next; readAt = Date.now(); paintNow(); totals(); };
+      // Disabled while it works; a failure says why and gives the button back.
+      const busy = async (btn, work) => {
+        btn.disabled = true;
         try { await work(); } catch (e) {
           toast(e.message || 'That did not go through. Try again.', true);
-          if (btn.isConnected) { btn.disabled = false; btn.innerHTML = was; }
+          if (btn.isConnected) btn.disabled = false;
         }
+      };
+
+      const goOut = () => {
+        let reason = '';
+        const s = openSheet(`
+          <div class="isheet" role="dialog" aria-modal="true" aria-labelledby="gt">
+            <div class="grab"></div>
+            <div class="inav"><button type="button" id="gx" data-autofocus>Cancel</button><h3 id="gt">Going Out for Work</h3><button type="button" id="gok" disabled>Go</button></div>
+            <div class="ig" role="radiogroup" aria-labelledby="gt">
+              ${ERRANDS.map((r) => `<button class="cell" type="button" role="radio" aria-checked="false" data-r="${esc(r)}"><span class="cell__main">${esc(r)}</span>${CHECK}</button>`).join('')}
+              <label class="cell"><input id="gother" maxlength="120" placeholder="Other reason" autocomplete="off" enterkeyhint="go"></label>
+            </div>
+            <p class="ifoot">Your hours keep counting while you’re out.</p>
+          </div>`);
+        const ok = s.el.querySelector('#gok');
+        const other = s.el.querySelector('#gother');
+        const choose = (r) => {
+          reason = r.trim();
+          s.el.querySelectorAll('[role=radio]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.r === r)));
+          ok.disabled = !reason;
+        };
+        s.el.querySelectorAll('[role=radio]').forEach((b) => { b.onclick = () => { other.value = ''; choose(b.dataset.r); }; });
+        other.oninput = () => choose(other.value);
+        other.onkeydown = (e) => { if (e.key === 'Enter' && !ok.disabled) ok.click(); };
+        s.el.querySelector('#gx').onclick = s.close;
+        ok.onclick = () => busy(ok, async () => {
+          const next = await api('/api/outForWork', { method: 'POST', body: { reason } });
+          s.close();
+          adopt(next);
+        });
+      };
+
+      const endDay = () => {
+        const s = openSheet(`
+          <div class="iaction" role="alertdialog" aria-modal="true" aria-labelledby="et">
+            <div class="ig"><div class="msg" id="et">End your day now? Your hours stop at ${hm(new Date().toISOString())}.</div>
+              <button type="button" class="danger" id="eok">End Day</button></div>
+            <div class="ig"><button type="button" class="strong" id="ex" data-autofocus>Cancel</button></div>
+          </div>`);
+        s.el.querySelector('#ex').onclick = s.close;
+        const ok = s.el.querySelector('#eok');
+        ok.onclick = () => busy(ok, async () => {
+          const next = await api('/api/checkOut', { method: 'POST', body: { source: 'banner', note: 'Done for the day' } });
+          if (next.checkedIn) throw new Error('Your day could not be ended. Try again.');
+          s.close();
+          adopt(next);
+          list();
+        });
       };
 
       const paintNow = () => {
         const box = $('mnow');
         if (!box) return;
         const out = st.checkedIn ? st.outForWork : null;
-        box.className = 'card now' + (out ? ' now--out' : st.checkedIn ? ' now--in' : '');
-        const line = out ? `${esc(out.reason)} · since ${hm(out.since)}`
-          : st.checkedIn ? `Since ${hm(st.since)}`
-          : 'You’re checked in when you arrive.';
-        let act = '';
-        if (out && asking === 'end') {
-          act = `<div class="acts"><span class="hint">End your day now?</span>
-            <button class="btn" id="mkeep" type="button">Not yet</button>
-            <button class="btn primary" id="mend" type="button">End day</button></div>`;
-        } else if (out) {
-          act = `<div class="acts"><button class="btn link" id="mdone" type="button">Done for the day</button>
-            <button class="btn primary" id="mback" type="button">I’m back</button></div>`;
-        } else if (st.checkedIn && asking === 'errand') {
-          act = `<div class="goout">
-              <div class="goout__q">Going out for</div>
-              <div class="reasons">${ERRANDS.map((r) => `<button class="reason" type="button" data-r="${esc(r)}">${esc(r)}</button>`).join('')}</div>
-              <input id="mwhy" maxlength="120" placeholder="Or type a reason" autocomplete="off" enterkeyhint="go">
-              <div class="acts"><button class="btn" id="mcancel" type="button">Cancel</button>
-                <button class="btn primary" id="mgo" type="button" disabled>Go out</button></div>
-            </div>`;
-        } else if (st.checkedIn) {
-          act = `<button class="btn block" id="merrand" type="button">${ic('briefcase')} Going out for work</button>`;
-        }
-        box.innerHTML = `<div class="now__row"><span class="now__dot"></span>
-            <span class="now__state">${out ? 'Out for work' : st.checkedIn ? 'At work' : 'Not at work'}</span></div>
-          <div class="now__line">${line}</div>${act ? `<div class="now__act">${act}</div>` : ''}`;
-
+        const row = (id, label) => `<button class="cell cell--action" type="button" id="${id}">${label}</button>`;
+        box.innerHTML = `
+          <div class="cell"><span class="dot${out ? ' dot--out' : st.checkedIn ? ' dot--in' : ''}"></span>
+            <span class="cell__main"><span class="cell__title state">${out ? 'Out for work' : st.checkedIn ? 'At work' : 'Not at work'}</span>
+              <span class="cell__sub">${out ? `${esc(out.reason)} · since ${hm(out.since)}`
+                : st.checkedIn ? `Since ${hm(st.since)}` : 'You’ll be checked in when you arrive.'}</span></span></div>
+          ${out ? row('mback', 'I’m Back') + row('mdone', 'Done for the Day')
+            : st.checkedIn ? row('merrand', 'Going Out for Work') : ''}`;
         const on = (id, fn) => { const el = $(id); if (el) el.onclick = () => fn(el); };
-        on('merrand', () => { asking = 'errand'; paintNow(); });
-        on('mcancel', () => { asking = null; paintNow(); });
-        on('mdone', () => { asking = 'end'; paintNow(); });
-        on('mkeep', () => { asking = null; paintNow(); });
-        on('mback', (b) => busy(b, 'One moment…', async () => {
-          adopt(await api('/api/backFromWork', { method: 'POST' }));
-          toast('Welcome back');
-        }));
-        on('mend', (b) => busy(b, 'Ending…', async () => {
-          const next = await api('/api/checkOut', { method: 'POST', body: { source: 'banner', note: 'Done for the day' } });
-          if (next.checkedIn) throw new Error('Your day could not be ended. Try again.');
-          adopt(next);
-          toast('Your day is done');
-          list();
-        }));
-        const why = $('mwhy');
-        if (!why) return;
-        const go = $('mgo');
-        const sync = () => {
-          const v = why.value.trim();
-          go.disabled = !v;
-          box.querySelectorAll('.reason').forEach((c) => c.classList.toggle('on', c.dataset.r === v));
-        };
-        box.querySelectorAll('.reason').forEach((c) => { c.onclick = () => { why.value = c.dataset.r; sync(); }; });
-        why.oninput = sync;
-        why.onkeydown = (e) => { if (e.key === 'Enter' && !go.disabled) go.click(); };
-        go.onclick = () => busy(go, 'Going out…', async () => {
-          adopt(await api('/api/outForWork', { method: 'POST', body: { reason: why.value.trim() } }));
-          toast('Out for work — your time keeps counting');
-        });
+        on('merrand', goOut);
+        on('mdone', endDay);
+        on('mback', (b) => busy(b, async () => adopt(await api('/api/backFromWork', { method: 'POST' }))));
       };
 
       const dayRow = (r) => {
         const end = r.status === 'open' ? 'now' : r.lastOut ? hm(r.lastOut) : 'no check-out';
-        return `<button class="day" type="button" data-day="${esc(r.date)}" aria-expanded="false">
-            <span class="day__d">${esc(dayLabel(r.date))}</span>
-            <span class="day__m">${dur(r.totalMinutes)}</span>
-            <span class="day__t">${r.firstIn ? `${hm(r.firstIn)} – ${end}` : '—'}</span>
+        return `<button class="cell" type="button" data-day="${esc(r.date)}" aria-expanded="false">
+            <span class="cell__main"><span class="cell__title">${esc(dayName(r.date))}</span>
+              <span class="cell__sub">${r.firstIn ? `${hm(r.firstIn)} – ${end}` : '—'}</span></span>
+            <span class="cell__detail">${span(r.totalMinutes)}</span>${CHEV}
           </button>
           <div class="punches" id="mpd-${esc(r.date)}" hidden></div>`;
       };
-      const punchRow = (e) => `<div class="punch"><span class="punch__t">${hm(e.at)}</span>
-        <span>${e.type === 'check_in' ? 'Arrived' : 'Left'}${e.note ? `<span class="punch__r">${esc(e.note)}</span>` : ''}</span></div>`;
+      const punchRow = (e) => `<div class="cell"><span class="cell__main">
+          <span class="cell__title">${e.type === 'check_in' ? 'Arrived' : 'Left'}</span>
+          ${e.note ? `<span class="cell__sub">${esc(e.note)}</span>` : ''}</span>
+        <span class="cell__detail">${hm(e.at)}</span></div>`;
+      const note = (text, cls = '') => `<div class="cell"><span class="cell__sub ${cls}">${esc(text)}</span></div>`;
 
       const list = async () => {
         const seq = ++MINE.seq;
         const [from, to] = MINE_PERIODS[MINE.period][1]();
-        $('mp').querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.p === MINE.period));
+        $('mp').querySelectorAll('button').forEach((b) => {
+          const on = b.dataset.p === MINE.period;
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-selected', String(on));
+        });
         $('mdates').hidden = MINE.period !== 'custom';
-        $('mrange').textContent = from === to ? dayLabel(from) : rangeLabel(from, to);
+        $('mrange').textContent = rangeName(from, to);
         $('msum').textContent = '';
-        $('mdays').innerHTML = '<p class="hint pad">Loading…</p>';
+        $('mdays').innerHTML = note('Loading…');
         try {
           const data = await api('/api/getMyHistory?' + new URLSearchParams({ from, to }));
           if (seq !== MINE.seq || !$('mdays')) return;
           const rows = ((data && data.days) || []).filter((r) => Number(r.totalMinutes) > 0 || r.firstIn);
-          $('msum').textContent = rows.length ? dur(rows.reduce((a, r) => a + Number(r.totalMinutes || 0), 0)) : '';
-          $('mdays').innerHTML = rows.length ? rows.map(dayRow).join('') : '<p class="hint pad">No hours on these dates.</p>';
-          $('mdays').querySelectorAll('.day').forEach((el) => {
+          $('msum').textContent = rows.length ? span(rows.reduce((a, r) => a + Number(r.totalMinutes || 0), 0)) : '';
+          $('mdays').innerHTML = rows.length ? rows.map(dayRow).join('') : note('No hours on these dates.');
+          $('mdays').querySelectorAll('[data-day]').forEach((el) => {
             el.onclick = async () => {
               const box = $('mpd-' + el.dataset.day);
               box.hidden = !box.hidden;
               el.setAttribute('aria-expanded', String(!box.hidden));
               if (box.hidden || box.dataset.loaded) return;
-              box.innerHTML = '<p class="hint">Loading…</p>';
+              box.innerHTML = note('Loading…');
               try {
                 const evs = await api('/api/getMyEvents?' + new URLSearchParams({ from: el.dataset.day, to: el.dataset.day }));
-                box.innerHTML = evs.length ? evs.slice().reverse().map(punchRow).join('') : '<p class="hint">Nothing recorded on this day.</p>';
+                box.innerHTML = evs.length ? evs.slice().reverse().map(punchRow).join('') : note('Nothing recorded on this day.');
                 box.dataset.loaded = '1';
               } catch (e) {
-                box.innerHTML = `<p class="hint err">${esc(e.message)}</p>`;
+                box.innerHTML = note(e.message, 'err');
               }
             };
           });
         } catch (e) {
-          if (seq === MINE.seq && $('mdays')) $('mdays').innerHTML = `<p class="hint err pad">${esc(e.message)}</p>`;
+          if (seq === MINE.seq && $('mdays')) $('mdays').innerHTML = note(e.message, 'err');
         }
       };
 
@@ -865,14 +961,14 @@
       };
       $('mfrom').onchange = pick;
       $('mto').onchange = pick;
+      if (MINE.from) { $('mfrom').value = MINE.from; $('mto').value = MINE.to; }
 
-      // Back in the app after a while: the shift may have ended or an errand
-      // finished on arrival. Never while a reason is half typed.
+      // Back in the app after a while: the shift may have ended, or an errand
+      // finished on arrival. Not while a sheet is asking something.
       MINE.refresh = async () => {
-        if (asking) return;
+        if (document.querySelector('.iback')) return;
         try { adopt(await api('/api/getMyStatus')); } catch (e) { toast(e.message, true); }
       };
-      if (MINE.period === 'custom') { $('mfrom').value = MINE.from; $('mto').value = MINE.to; }
       paintNow();
       totals();
       list();
