@@ -9,7 +9,7 @@ import { dirname, join } from 'path';
 
 import { authMiddleware, verifyToken, requireGateway } from './auth.js';
 import * as db from './db.js';
-import { planFor } from './notify_plan.js';
+import { planFor, setupNudge } from './notify_plan.js';
 import { handleRpc } from './mcp.js';
 import { fetchRoster, rosterHealth } from './roster.js';
 import { nameMapOf, withNames } from './names.js';
@@ -531,6 +531,9 @@ app.get('/api/admin/members', manager, async (req, res) => {
       role: (m && m.role) || null,
       // Who has attendance is decided in Eesa; the page shows it, it doesn't set it.
       attendanceRole: u.attendanceRole || null,
+      // Whether their phone can record their hours on its own (absent until the
+      // Eesa backend reports it; null = no phone has ever reported).
+      ...(u.device !== undefined ? { device: u.device } : {}),
       payRate: (m && m.payRate) ?? null,
       // The saved job-type assignment has to come back, or the Team tab's
       // checkboxes render unticked for someone who HAS types assigned — and the
@@ -616,6 +619,31 @@ app.post('/api/admin/confirm', manager, async (req, res) => {
     });
   }
   res.json({ ok: true, data: result });
+});
+
+// Tell someone their phone can't record their hours yet, and the one thing to
+// change. At most once per person per ten minutes, so a double tap is one push.
+const NUDGE_GAP_MS = 10 * 60 * 1000;
+const lastNudge = new Map();
+app.post('/api/admin/members/:employeeRef/nudge', manager, async (req, res) => {
+  const tenantId = req.ctx.tenantId;
+  const ref = String(req.params.employeeRef);
+  const key = `${tenantId}|${ref}`;
+  if (Date.now() - (lastNudge.get(key) || 0) < NUDGE_GAP_MS) {
+    return res.status(429).json({ ok: false, error: { code: 'NUDGED_RECENTLY', message: 'Already nudged in the last 10 minutes.' } });
+  }
+  const person = (await fetchRoster(tenantId)).find((u) => String(u.id) === ref);
+  if (!person) {
+    return res.status(404).json({ ok: false, error: { code: 'UNKNOWN_PERSON', message: 'That person is not in this workspace.' } });
+  }
+  if (person.device && person.device.ready) {
+    return res.status(409).json({ ok: false, error: { code: 'ALREADY_READY', message: 'Their phone is already set up.' } });
+  }
+  lastNudge.set(key, Date.now());
+  // The app routes a staff-kind attendance type with no employeeRef to the
+  // person's own attendance screen — where Check my setup lives.
+  notifyUser(tenantId, ref, { ...setupNudge(person.device || null), type: 'attendance_check_in', data: { kind: 'setup' } });
+  res.json({ ok: true });
 });
 
 app.get('/api/admin/presence', manager, async (req, res) => {

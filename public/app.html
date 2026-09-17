@@ -907,11 +907,16 @@
     // themselves, and a day that needs a fix is fixed from Timesheets.
     VIEWS.today = async () => {
       const [from, to] = weekRange(0);
-      const [presence, zones, week] = await Promise.all([
+      const [presence, zones, week, members] = await Promise.all([
         api('/api/admin/presence'),
         api('/api/admin/zones').catch(() => []),
         api('/api/admin/approvals?' + new URLSearchParams({ from, to })).catch(() => []),
+        api('/api/admin/members').catch(() => []),
       ]);
+      // Staff whose phone can't record their hours by itself. Unknown until the
+      // roster reports phones at all, and then the zone count shows instead.
+      const phonesKnown = members.some((m) => 'device' in m);
+      const notReady = members.filter((m) => m.attendanceRole === 'staff' && 'device' in m && !(m.device && m.device.ready)).length;
       const rows = presence.employees || [];
       const people = rows.filter((p) => p.lastLocation);
       const inNow = rows.filter((r) => r.checkedIn).length;
@@ -932,7 +937,9 @@
           </div>
           <div class="stats">
             <div class="stat"><div class="stat__num num">${rows.length}</div><div class="stat__lbl">Came in today</div></div>
-            <div class="stat"><div class="stat__num num">${zones.length}</div><div class="stat__lbl">Work zones</div></div>
+            ${phonesKnown
+              ? `<div class="stat" id="goready" role="button" tabindex="0" style="cursor:pointer"><div class="stat__num num">${notReady}</div><div class="stat__lbl">Phones not ready</div></div>`
+              : `<div class="stat"><div class="stat__num num">${zones.length}</div><div class="stat__lbl">Work zones</div></div>`}
             <div class="stat"><div class="stat__num num">${needsFix}</div><div class="stat__lbl">Need a fix</div></div>
           </div>
         </div>
@@ -966,6 +973,8 @@
 
       const gofix = $('gofix');
       if (gofix) gofix.onclick = () => go('timesheets');
+      const goready = $('goready');
+      if (goready) goready.onclick = goready.onkeydown = (e) => { if (!e.key || e.key === 'Enter') go('setup'); };
 
       if (rows.length) {
         const render = () => {
@@ -1184,7 +1193,7 @@
 
       host.innerHTML = banner + `<div class="card">
         <h2>${ic('users')} People</h2>
-        <p class="lead">Everyone in your workspace. Who has attendance, and who is an admin, is set in Eesa. The pay rate is what Timesheets use.</p>
+        <p class="lead">Everyone in your workspace. Who has attendance, and who is an admin, is set in Eesa. Phone shows whether their phone can record their hours by itself. The pay rate is what Timesheets use.</p>
         ${rows.length ? `
         <div class="toolbar">
           <input class="search" id="tq" type="search" placeholder="Search name or email" autocomplete="off">
@@ -1224,16 +1233,28 @@
 
       // Row ids stay keyed to each person's index in the FULL list, so filtering
       // only changes what is drawn — never which control belongs to whom.
+      // Whether this person's phone can record their hours with nobody touching
+      // it — and if not, why, in words to pass on, with a Nudge that does.
+      const phoneCell = (u, i) => {
+        if (!u.attendanceRole || !('device' in u)) return '';
+        const dv = u.device;
+        if (dv && dv.ready) return '<span class="pill approved">Ready</span>';
+        return `<span class="pill pending">Not ready</span>
+          <div class="muted" style="font-size:.72rem;margin-top:4px;max-width:220px">${esc(dv ? dv.reason : 'Eesa AI hasn’t been opened on a phone yet')}</div>
+          <button class="btn link" data-nudge="${i}" type="button" style="padding:2px 0;font-size:.78rem">Nudge</button>`;
+      };
+
       const rowHtml = (u, i) => {
         const ids = u.workTypeIds || [];
         const jobs = catalog.map((w) => `<label class="wtchk"><input type="checkbox" data-wt="${i}" value="${esc(w.id)}" ${ids.includes(w.id) ? 'checked' : ''}> ${esc(w.name)}</label>`).join('');
         return `<tr>
           <td><div style="font-weight:600">${esc(u.name || u.email || u.employeeRef)}</div><div class="muted" style="font-size:.74rem">${esc(u.email || '')}</div></td>
           <td>${u.attendanceRole === 'admin' ? '<span class="pill approved">Admin</span>' : u.attendanceRole === 'staff' ? '<span class="pill complete">Staff</span>' : '<span class="muted" style="font-size:.78rem">No attendance</span>'}</td>
+          <td>${phoneCell(u, i)}</td>
           ${u.attendanceRole ? `<td><input id="p${i}" style="width:84px" type="number" min="0" step="0.5" value="${u.payRate == null ? '' : u.payRate}" placeholder="—"></td>
           <td><button class="btn small primary" id="s${i}">Save</button></td>` : '<td></td><td></td>'}
         </tr>
-        ${u.attendanceRole && catalog.length ? `<tr class="wtrow"><td colspan="4"><div class="muted" style="font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">Job types</div><div class="wtwrap">${jobs}</div></td></tr>` : ''}`;
+        ${u.attendanceRole && catalog.length ? `<tr class="wtrow"><td colspan="5"><div class="muted" style="font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">Job types</div><div class="wtwrap">${jobs}</div></td></tr>` : ''}`;
       };
 
       const bind = (u, i) => {
@@ -1265,9 +1286,18 @@
           ? `${rows.length} ${rows.length === 1 ? 'person' : 'people'}`
           : `${matches.length} of ${rows.length}`;
         $('tbody').innerHTML = matches.length
-          ? `<table><thead><tr><th>Name</th><th>Attendance</th><th>Pay/hr</th><th></th></tr></thead><tbody>${matches.map(([u, i]) => rowHtml(u, i)).join('')}</tbody></table>`
+          ? `<table><thead><tr><th>Name</th><th>Attendance</th><th>Phone</th><th>Pay/hr</th><th></th></tr></thead><tbody>${matches.map(([u, i]) => rowHtml(u, i)).join('')}</tbody></table>`
           : empty('users', 'Nobody matches those filters.');
         matches.forEach(([u, i]) => bind(u, i));
+        $('tbody').querySelectorAll('button[data-nudge]').forEach((b) => b.onclick = async () => {
+          const u = rows[Number(b.dataset.nudge)];
+          b.disabled = true;
+          try {
+            await api(`/api/admin/members/${encodeURIComponent(u.employeeRef)}/nudge`, { method: 'POST' });
+            b.textContent = 'Nudged';
+            toast(`Nudged ${u.name || u.email}`);
+          } catch (e) { b.disabled = false; toast(e.message, true); }
+        });
       };
       $('tq').oninput = render;
       if ($('tjob')) $('tjob').onchange = render;

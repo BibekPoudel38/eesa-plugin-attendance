@@ -39,3 +39,23 @@ export function planFor({
     data: { punch: type, at, zone, minutes: String(minutes) },
   }];
 }
+
+/// What someone is told when a manager taps Nudge: the one change that lets
+/// their phone record their hours, in the words of the screen they will open.
+/// `device` is the roster's summary of their newest phone (null = none yet).
+export function setupNudge(device) {
+  const title = 'Your hours aren’t recording yet';
+  switch (device ? device.code : 'no_phone') {
+    case 'location':
+      return { title, body: 'On your iPhone open Settings › Eesa AI › Location and choose Always. That’s all — your hours then record themselves.' };
+    case 'location_services_off':
+      return { title, body: 'On your iPhone open Settings › Privacy & Security › Location Services, turn it on, then set Eesa AI to Always.' };
+    case 'not_seen':
+      return { title, body: 'Open Eesa AI once so it can check your attendance setup.' };
+    case 'attendance_off':
+    case 'no_phone':
+      return { title, body: 'Open Eesa AI › Settings › Attendance and turn it on.' };
+    default:
+      return { title, body: 'Open Eesa AI › Settings › Attendance and tap Check my setup.' };
+  }
+}

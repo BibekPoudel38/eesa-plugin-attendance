@@ -2,7 +2,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { planFor } from '../src/notify_plan.js';
+import { planFor, setupNudge } from '../src/notify_plan.js';
 
 const base = { at: '9:11 AM', zone: 'Chups Anaheim', worked: '5h 06m', minutes: 306 };
 
@@ -44,5 +44,27 @@ describe('what managers hear per punch', () => {
         assert.ok(!planFor({ ...base, type, source }).some((i) => i.to === 'managers'), `${source} ${type}`);
       }
     }
+  });
+});
+
+describe('a nudge names the one thing to change', () => {
+  test('location short of Always sends them to the iPhone setting', () => {
+    const m = setupNudge({ ready: false, code: 'location', reason: 'Location is set to Never — it needs Always' });
+    assert.match(m.body, /Settings › Eesa AI › Location/);
+    assert.match(m.body, /Always/);
+  });
+  test('Location Services off is a different switch', () => {
+    assert.match(setupNudge({ code: 'location_services_off' }).body, /Location Services/);
+  });
+  test('a phone that has not reported just needs Eesa opened', () => {
+    assert.match(setupNudge({ code: 'not_seen' }).body, /Open Eesa AI once/);
+  });
+  test('attendance off, or no phone at all, is turned on in the app', () => {
+    assert.match(setupNudge({ code: 'attendance_off' }).body, /Settings › Attendance and turn it on/);
+    assert.match(setupNudge(null).body, /Settings › Attendance and turn it on/);
+  });
+  test('anything else runs the built-in check', () => {
+    assert.match(setupNudge({ code: 'no_zones' }).body, /Check my setup/);
+    assert.equal(setupNudge({ code: 'unreachable' }).title, 'Your hours aren’t recording yet');
   });
 });
