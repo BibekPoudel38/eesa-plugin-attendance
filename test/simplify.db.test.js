@@ -240,6 +240,15 @@ describe('simplified attendance on a real database', { skip }, () => {
     assert.equal(await db.setMyReason(T, '58', old.id, 'Work'), false, 'too long ago to change');
   });
 
+  test('the attendance admin cannot change who is an admin — that is Eesa\'s', async () => {
+    await db.upsertMember(T, { employeeRef: '61', role: 'manager', payRate: 20, name: 'Manager' });
+    await db.upsertMemberDetails(T, { employeeRef: '61', payRate: 25, name: 'Manager', email: '' });
+    assert.equal((await db.getMembership(T, '61')).role, 'manager', 'the role it already had');
+    assert.equal(Number((await db.getMembership(T, '61')).payRate), 25, 'and the pay it was given');
+    await db.upsertMemberDetails(T, { employeeRef: '62', payRate: 18, name: 'New', email: '' });
+    assert.equal((await db.getMembership(T, '62')).role, 'staff', 'a new row is never a manager');
+  });
+
   test('somebody who says "Not for work" is on site but not counted as at work', async () => {
     const came = await punch('60', 'check_in', new Date(Date.now() - 30 * 60e3).toISOString());
     const mine = async () => (await db.presence(T)).employees.find((e) => e.employeeRef === '60');

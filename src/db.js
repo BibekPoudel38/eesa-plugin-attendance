@@ -1448,6 +1448,14 @@ export async function listMembers(tenantId) {
   return rows.map(memberOut);
 }
 
+/// Everything about a member EXCEPT their role, which belongs to Eesa. An
+/// existing row keeps the role it has; a new one starts as staff. Nothing the
+/// attendance admin does can promote anybody.
+export async function upsertMemberDetails(tenantId, details) {
+  const current = await getMembership(tenantId, details.employeeRef);
+  return upsertMember(tenantId, { ...details, role: (current && current.role) || 'staff' });
+}
+
 export async function upsertMember(
   tenantId,
   { employeeRef, role = 'staff', payRate = null, name = '', email = '', workTypeIds = null },

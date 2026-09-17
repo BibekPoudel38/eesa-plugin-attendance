@@ -568,10 +568,13 @@ app.get('/api/admin/members', manager, async (req, res) => {
   if (rows.length === 0) out.diag = await rosterHealth(tenantId);
   res.json(out);
 });
+// Pay and job types only. Who is an admin and who is staff is decided in Eesa
+// (Management → Attendance) and arrives on the token; a role sent here is
+// ignored, so the two places can never disagree about who approves hours.
 app.post('/api/admin/members', manager, async (req, res) => {
-  const { employeeRef, role = 'staff', payRate = null, name = '', email = '', workTypeIds } = req.body || {};
+  const { employeeRef, payRate = null, name = '', email = '', workTypeIds } = req.body || {};
   if (!employeeRef) return res.status(400).json({ ok: false, error: 'employeeRef required' });
-  res.json({ ok: true, data: await db.upsertMember(req.ctx.tenantId, { employeeRef, role, payRate, name, email, workTypeIds }) });
+  res.json({ ok: true, data: await db.upsertMemberDetails(req.ctx.tenantId, { employeeRef, payRate, name, email, workTypeIds }) });
 });
 app.delete('/api/admin/members/:id', manager, async (req, res) =>
   res.json({ ok: true, data: await db.removeMember(req.ctx.tenantId, req.params.id) }));

@@ -1133,24 +1133,70 @@
     }
 
     // ==================== TODAY ====================
-    // Who is at work, who is out for work, who finished, and who never came in.
+    // What a manager needs before anything else: who is here now, what needs
+    // them, and what the week has cost. Everyone else — finished, never came in
+    // — folds away, because a list of sixteen names nobody has to act on is
+    // what made the old screen worth skipping.
     VIEWS.today = async () => {
-      const { people } = await teamToday();
+      const [{ people }, week] = await Promise.all([
+        teamToday(),
+        api('/api/admin/approvals?' + new URLSearchParams({ from: weekRange(0)[0], to: todayTZ() })).catch(() => []),
+      ]);
       const of = (k) => people.filter((p) => stateOf(p) === k);
-      const groups = ['in', 'out', 'onsite', 'done', 'absent'];
+      const here = [...of('in'), ...of('out'), ...of('onsite')];
+      const fixes = week.filter((d) => d.needsFix).length;
+      const blind = people.filter((p) => p.role === 'staff' && !(p.device && p.device.ready)).length;
+      const teamMinutes = week.reduce((n, d) => n + Number(d.totalMinutes || 0), 0);
+      const fold = (id, label, list) => (list.length ? `
+        <button class="cell" type="button" data-fold="${id}" aria-expanded="false">
+          <span class="cell__main">${label}</span><span class="cell__detail">${list.length}</span>${CHEV}</button>
+        <div class="punches" id="fold-${id}" hidden>${list.map(personRow).join('')}</div>` : '');
+
       $('view').innerHTML = `
         <div class="ig sum">
           <div><div class="sum__l">At work</div><div class="sum__n">${of('in').length}</div></div>
           <div><div class="sum__l">Out for work</div><div class="sum__n">${of('out').length}</div></div>
           <div><div class="sum__l">Not in</div><div class="sum__n">${of('absent').length}</div></div>
         </div>
-        ${people.length ? groups.map((k) => {
-          const list = of(k);
-          if (!list.length) return '';
-          return `<div class="ihead"><span>${STATE[k][0]}</span><span>${list.length}</span></div>
-            <div class="ig">${list.map(personRow).join('')}</div>`;
-        }).join('') : `<div class="ig">${cellNote('Nobody is enrolled in attendance yet.')}</div>`}`;
-      bindPeople($('view'));
+
+        <div class="ihead"><span>Here now</span><span>${here.length || ''}</span></div>
+        <div class="ig" id="thead">${here.length ? here.map(personRow).join('') : cellNote('Nobody is at work right now.')}</div>
+        <div class="ig">
+          ${fold('done', 'Finished today', of('done'))}
+          ${fold('away', 'Not in today', of('absent'))}
+          <button class="cell cell--action" type="button" id="toteam">See everyone</button>
+        </div>
+
+        ${fixes || blind ? `<div class="ihead"><span>Needs you</span></div>
+        <div class="ig">
+          ${fixes ? `<button class="cell" type="button" id="tofix">
+            <span class="cell__main">${fixes === 1 ? 'A day needs a fix' : 'Days need a fix'}</span>
+            <span class="cell__detail">${fixes}</span>${CHEV}</button>` : ''}
+          ${blind ? `<button class="cell" type="button" id="toset">
+            <span class="cell__main">Phones not recording</span>
+            <span class="cell__detail">${blind}</span>${CHEV}</button>` : ''}
+        </div>` : ''}
+
+        <div class="ihead"><span>This week</span><span>${rangeName(weekRange(0)[0], todayTZ())}</span></div>
+        <div class="ig">
+          <div class="cell"><span class="cell__label">Team hours</span><span class="cell__detail cell__value">${span(teamMinutes)}</span></div>
+          <button class="cell cell--action" type="button" id="toweek">Open the week</button>
+        </div>`;
+
+      $('view').querySelectorAll('[data-fold]').forEach((b) => {
+        b.onclick = () => {
+          const box = $('fold-' + b.dataset.fold);
+          box.hidden = !box.hidden;
+          b.setAttribute('aria-expanded', String(!box.hidden));
+          if (!box.hidden) bindPeople(box);
+        };
+      });
+      const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+      on('tofix', () => { TEAM.mode = 'week'; TEAM.person = null; go('team'); });
+      on('toset', () => go('setup'));
+      on('toteam', () => { TEAM.mode = 'people'; TEAM.person = null; go('team'); });
+      on('toweek', () => { TEAM.mode = 'week'; TEAM.person = null; go('team'); });
+      bindPeople($('thead'));
     };
 
     // ==================== STAFF ====================
@@ -1489,7 +1535,7 @@
 
       host.innerHTML = banner + `<div class="card">
         <h2>${ic('users')} People</h2>
-        <p class="lead">Everyone in your workspace. Who has attendance, and who is an admin, is set in Eesa. Phone shows whether their phone can record their hours by itself. The pay rate is what Timesheets use.</p>
+        <p class="lead">Everyone in your workspace. Who has attendance, and who is an admin, is set in Eesa AI → Management → Attendance, and only there. Phone shows whether their phone can record their hours by itself. The pay rate is what Timesheets use.</p>
         ${rows.length ? `
         <div class="toolbar">
           <input class="search" id="tq" type="search" placeholder="Search name or email" autocomplete="off">
