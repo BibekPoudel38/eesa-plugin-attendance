@@ -399,6 +399,15 @@ export function punchedAt(clientAt, now = Date.now()) {
 /// Punches a phone made on its own — what a fence or a replayed queue reports.
 const PHONE_OBSERVED = new Set(['geofence', 'replay']);
 
+/// Why someone came in or went out. Staff never check in or out by hand; they
+/// only say why. Two reasons change the hours: "Outside work" counts the time
+/// away until they are back, and "Not for work" leaves that visit out. Every
+/// other reason is a note for the manager.
+export const REASON = Object.freeze({
+  work: 'Work', notForWork: 'Not for work', goingHome: 'Going home', outsideWork: 'Outside work',
+});
+const isReason = (note, reason) => String(note || '').trim().toLowerCase() === reason.toLowerCase();
+
 /// Tables the simplified attendance model needs, created if missing.
 ///
 /// Same approach as ensureSettingsColumn: the schema lives in the database,
@@ -794,6 +803,8 @@ export function computeToday(
   let lastZone = null;
   let ms = 0;
   let shortVisits = 0;
+  // Left for outside work: the stretch stays open until they are back.
+  let awayForWork = null;
   // A finished stretch of presence counts only if it lasted long enough to be work.
   const closeAt = (at) => {
     const span = at - openIn;
@@ -805,10 +816,11 @@ export function computeToday(
   for (const e of events) {
     const at = new Date(e.at);
     if (e.type === 'check_in') {
-      // "Here but not for work" (the geofence prompt's No / banner toggle) stops
-      // counting work time from this point — it closes any open interval and does
-      // NOT reopen one.
-      if (e.for_work === false) {
+      // Back from outside work: the trip has counted up to here.
+      awayForWork = null;
+      // "Here but not for work" stops counting work time from this point — it
+      // closes any open interval and does NOT reopen one.
+      if (e.for_work === false || isReason(e.note, REASON.notForWork)) {
         if (openIn) closeAt(at);
         continue;
       }
@@ -829,9 +841,16 @@ export function computeToday(
       lastZone = e.zone_id;
     } else if (e.type === 'check_out') {
       lastOut = at;
-      if (openIn) closeAt(at);
+      // Out for work and never seen back before leaving again: it ended when they left.
+      if (awayForWork) { closeAt(awayForWork); awayForWork = null; }
+      if (openIn) {
+        if (isReason(e.note, REASON.outsideWork)) awayForWork = at;
+        else closeAt(at);
+      }
     }
   }
+  // Not back from outside work (yet): the hours stop when they left.
+  if (awayForWork) closeAt(awayForWork);
   const checkedIn = openIn != null;
   // An unfinished shift bills what it has run while it plausibly still runs.
   // Past the ceiling it is a check-out that never came, and it bills NOTHING:
@@ -857,6 +876,26 @@ export function computeToday(
     shortVisits,
     totalMinutes: Math.max(0, Math.round(ms / 60000)),
   };
+}
+
+/// Why someone came in or went out, written on a punch the phone made. Only
+/// their own punches from today or yesterday, and only the reason: the time
+/// stays exactly what the phone recorded.
+export async function setMyReason(tenantId, employeeRef, eventId, reason) {
+  await ensureSimplifyTables();
+  const tz = await tenantTz(tenantId);
+  const why = String(reason ?? '').trim().slice(0, 120) || null;
+  const rows = await q(
+    `update events set note = $4
+      where tenant_id = $1 and employee_ref = $2 and id::text = $3
+        and (at at time zone $5)::date >= (now() at time zone $5)::date - 1
+      returning id, at`,
+    [tenantId, employeeRef, String(eventId ?? ''), why, tz],
+  );
+  if (!rows.length) return false;
+  // "Outside work" and "Not for work" change the day's hours.
+  await upsertDaySummary(tenantId, employeeRef, await shiftDayOfEvent(tenantId, employeeRef, rows[0].id, rows[0].at));
+  return true;
 }
 
 export async function myStatus(tenantId, employeeRef) {
@@ -1132,7 +1171,7 @@ export async function presence(tenantId) {
          select (date_trunc('day', now() at time zone $2) at time zone $2) as t
        ),
        latest as (
-         select distinct on (employee_ref) employee_ref, type, at
+         select distinct on (employee_ref) employee_ref, type, note, at
            from events, day_start
           where tenant_id = $1 and at >= day_start.t
           order by employee_ref, at desc
@@ -1144,7 +1183,7 @@ export async function presence(tenantId) {
             and lat is not null and lng is not null
           order by employee_ref, at desc
        )
-       select l.employee_ref, l.type, l.at, g.type as located_type, g.source as located_source,
+       select l.employee_ref, l.type, l.at, l.note as reason, g.type as located_type, g.source as located_source,
               g.lat, g.lng, g.accuracy_m, g.zone_id, g.at as located_at,
               z.name as zone_name, z.center_lat, z.center_lng, z.radius_m,
               coalesce(m.name, '') as name
@@ -1167,6 +1206,8 @@ export async function presence(tenantId) {
         name: r.name || '',
         checkedIn: r.type === 'check_in',
         at: iso(r.at),
+        // Why they came in or went out, if they said.
+        reason: r.reason || null,
         // Where they were when they last punched — NOT a live position. The
         // device only reports at a geofence trigger, so `lastLocation.at` is
         // what the UI must show alongside the dot.

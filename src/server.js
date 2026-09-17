@@ -495,6 +495,17 @@ app.post('/api/kiosk/nfc', manager, async (req, res) => {
   await db.recordEvent(req.ctx.tenantId, tag.employeeRef, type, { zoneId: tag.zoneId, lat, lng, accuracyM, source: 'nfc' });
   res.json({ ok: true, data: { action: type, employeeRef: tag.employeeRef, status: await db.myStatus(req.ctx.tenantId, tag.employeeRef) } });
 });
+// The only thing staff change by hand: why they came in or went out.
+app.post('/api/setMyReason', emp, async (req, res) => {
+  const { eventId = null, reason = '' } = req.body || {};
+  if (!eventId) {
+    return res.status(400).json({ ok: false, error: { code: 'EVENT_REQUIRED', message: 'Choose which check-in or check-out this is for.' } });
+  }
+  if (!(await db.setMyReason(req.ctx.tenantId, req.ctx.sub, eventId, reason))) {
+    return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: 'That check-in or check-out can’t be changed any more.' } });
+  }
+  res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) });
+});
 app.get('/api/getMyStatus', emp, async (req, res) => res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) }));
 app.get('/api/getMyZones', emp, async (req, res) => res.json({ ok: true, data: await db.listZones(req.ctx.tenantId) }));
 app.get('/api/getMyHistory', emp, async (req, res) =>

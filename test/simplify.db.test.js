@@ -224,6 +224,34 @@ describe('simplified attendance on a real database', { skip }, () => {
     assert.equal(log.find((e) => e.type === 'check_in').note, 'Work');
   });
 
+  test('staff say why they came in or went out, on their own recent punches, and the hours never move', async () => {
+    const came = await punch('56', 'check_in', new Date(Date.now() - 2 * 3600e3).toISOString());
+    const left = await punch('56', 'check_out', new Date(Date.now() - 3600e3).toISOString(), { lat: C.lat + 0.003 });
+    assert.equal(await db.setMyReason(T, '56', left.id, '  Outside work '), true);
+    assert.equal(await db.setMyReason(T, '56', came.id, 'Work'), true);
+    assert.equal(await db.setMyReason(T, '57', came.id, 'Not mine'), false, "someone else's punch");
+    assert.equal(await db.setMyReason(T, '56', 'not-an-id', 'Work'), false);
+    const st = await db.myStatus(T, '56');
+    assert.deepEqual(st.events.map((e) => e.note), ['Outside work', 'Work']);
+    assert.equal(st.todayMinutes, 60, 'a reason never changes the hours');
+    assert.equal((await db.presence(T)).employees.find((e) => e.employeeRef === '56').reason, 'Outside work');
+    const old = await punch('58', 'check_in', new Date(Date.now() - 3 * 24 * 3600e3).toISOString());
+    assert.equal(await db.setMyReason(T, '58', old.id, 'Work'), false, 'too long ago to change');
+  });
+
+  test('saying "Outside work" afterwards counts the trip in the day', async () => {
+    const Y = daysAgo(1);
+    await punch('59', 'check_in', zoned(Y, '09:00'));
+    const out = await punch('59', 'check_out', zoned(Y, '11:00'), { lat: C.lat + 0.003 });
+    await punch('59', 'check_in', zoned(Y, '12:30'));
+    await punch('59', 'check_out', zoned(Y, '17:00'), { lat: C.lat + 0.003 });
+    assert.equal((await dayRow('59', Y)).totalMinutes, 390);
+    assert.equal(await db.setMyReason(T, '59', out.id, 'Outside work'), true);
+    assert.equal((await dayRow('59', Y)).totalMinutes, 480);
+    assert.equal(await db.setMyReason(T, '59', out.id, ''), true, 'clearing it is allowed');
+    assert.equal((await dayRow('59', Y)).totalMinutes, 390);
+  });
+
   test('checked out by tapping with a reason, the time stops there', async () => {
     await punch('53', 'check_in', zoned(D3, '09:00'));
     await db.recordEvent(T, '53', 'check_out', { zoneId: null, source: 'banner', note: 'Outside work', at: zoned(D3, '11:00') });

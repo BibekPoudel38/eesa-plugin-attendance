@@ -120,6 +120,35 @@ describe('computeToday — hours from a day of punches', () => {
     assert.equal(t.totalMinutes, 120);
   });
 
+  test('"Outside work" counts the time away until they are back', () => {
+    const day = [
+      ev('check_in', '09:00'), ev('check_out', '11:00', { note: 'Outside work' }),
+      ev('check_in', '12:30'), ev('check_out', '17:00', { note: 'Going home' }),
+    ];
+    assert.equal(computeToday(day).totalMinutes, 480);
+    const noReason = day.map((e, i) => (i === 1 ? { ...e, note: null } : e));
+    assert.equal(computeToday(noReason).totalMinutes, 390, 'no reason: the trip is not counted');
+  });
+
+  test('"Outside work" and never back: the hours stop when they left', () => {
+    const t = computeToday([ev('check_in', '09:00'), ev('check_out', '15:00', { note: ' outside work ' })]);
+    assert.equal(t.totalMinutes, 360);
+    assert.equal(t.checkedIn, false);
+    const twice = computeToday([
+      ev('check_in', '09:00'), ev('check_out', '11:00', { note: 'Outside work' }), ev('check_out', '13:00'),
+    ]);
+    assert.equal(twice.totalMinutes, 120, 'a second departure with no return between ends it at the first');
+  });
+
+  test('"Not for work" leaves the visit out; any other reason is only a note', () => {
+    assert.equal(computeToday([ev('check_in', '14:00', { note: 'Not for work' }), ev('check_out', '14:40')]).totalMinutes, 0);
+    const lunch = computeToday([
+      ev('check_in', '09:00'), ev('check_out', '13:00', { note: 'Lunch' }),
+      ev('check_in', '13:30'), ev('check_out', '17:00'),
+    ]);
+    assert.equal(lunch.totalMinutes, 450);
+  });
+
   test('a check-out with nothing open does not go negative', () => {
     const t = computeToday([ev('check_out', '17:00')]);
     assert.equal(t.totalMinutes, 0);

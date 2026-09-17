@@ -385,7 +385,9 @@
     .cell__title { display:block; font-size:17px; line-height:22px; }
     .cell__sub { display:block; font-size:15px; line-height:20px; letter-spacing:-.24px; color:var(--ios-2); }
     .cell__detail { color:var(--ios-2); font-variant-numeric:tabular-nums; white-space:nowrap; }
-    .cell--action { color:var(--primary); }
+    .cell__add { color:var(--primary); }
+    .cell__label { flex:none; white-space:nowrap; }
+    .cell__value { flex:1 1 auto; min-width:0; text-align:right; overflow:hidden; text-overflow:ellipsis; }
     .punches .cell__title { font-size:15px; line-height:20px; }
     .chev { width:8px; height:13px; flex:none; color:var(--ios-3); transition:transform .2s; }
     [aria-expanded="true"] > .chev { transform:rotate(90deg); }
@@ -717,8 +719,14 @@
     const VIEWS = {};
 
     // ==================== STAFF ====================
-    // One page: whether the phone has you checked in, and your hours. Nobody
-    // checks in or out by hand; the phone does it as people arrive and leave.
+    // One page. The phone checks people in and out as they arrive and leave;
+    // nobody does it by hand. What a person adds is why: why they came in, and
+    // why they went out. "Outside work" counts the time away until they are
+    // back, "Not for work" leaves a visit out, and anything else is a note.
+    const WHY = {
+      check_in: { label: 'Reason for coming in', question: 'Why did you come in?', reasons: ['Work', 'Not for work'], other: false },
+      check_out: { label: 'Reason for going out', question: 'Why did you go out?', reasons: ['Going home', 'Outside work'], other: true },
+    };
     const CHEV = '<svg class="chev" viewBox="0 0 8 13" aria-hidden="true"><path d="M1.5 1.5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     // "9:02 AM" on the restaurant's clock, in the phone's own format.
     const hm = (iso) => iso
@@ -735,7 +743,7 @@
       : SPAN_FMT.formatRange ? SPAN_FMT.formatRange(utcDay(f), utcDay(t))
       : `${SPAN_FMT.format(utcDay(f))} – ${SPAN_FMT.format(utcDay(t))}`);
 
-    const MINE = { period: 'week', from: null, to: null, seq: 0, refresh: null };
+    const MINE = { period: 'week', from: null, to: null, seq: 0, openDay: null, refresh: null };
     const MINE_PERIODS = {
       week: ['This Week', () => [weekRange(0)[0], todayTZ()]],
       last: ['Last Week', () => weekRange(-1)],
@@ -827,19 +835,66 @@
         }
       };
 
+      // A reason changes the day's hours, so everything is read again.
+      const save = async (e, reason, sheet) => {
+        await api('/api/setMyReason', { method: 'POST', body: { eventId: e.id, reason } });
+        sheet.close();
+        await VIEWS.me();
+      };
+
+      const askWhy = (e) => {
+        const w = WHY[e.type];
+        const s = openSheet(`
+          <div class="iaction" role="alertdialog" aria-modal="true" aria-labelledby="wt">
+            <div class="ig"><div class="msg" id="wt">${w.question}</div>
+              ${w.reasons.map((r) => `<button type="button" data-r="${esc(r)}">${esc(r)}</button>`).join('')}
+              ${w.other ? '<button type="button" data-other>Other…</button>' : ''}</div>
+            <div class="ig"><button type="button" class="strong" data-x data-autofocus>Cancel</button></div>
+          </div>`);
+        s.el.querySelector('[data-x]').onclick = s.close;
+        s.el.querySelectorAll('[data-r]').forEach((b) => { b.onclick = () => busy(b, () => save(e, b.dataset.r, s)); });
+        const other = s.el.querySelector('[data-other]');
+        if (other) other.onclick = () => { s.close(); askOther(e); };
+      };
+
+      const askOther = (e) => {
+        const w = WHY[e.type];
+        const typed = e.note && !w.reasons.includes(e.note) ? e.note : '';
+        const s = openSheet(`
+          <div class="ialert" role="alertdialog" aria-modal="true" aria-labelledby="ot">
+            <div class="ialert__body"><h3 id="ot">${w.label}</h3>
+              <input id="oreason" maxlength="120" placeholder="Reason" autocomplete="off" enterkeyhint="done" value="${esc(typed)}" data-autofocus></div>
+            <div class="ialert__acts"><button type="button" data-x>Cancel</button><button type="button" data-ok>Save</button></div>
+          </div>`, { center: true });
+        const input = s.el.querySelector('#oreason');
+        const ok = s.el.querySelector('[data-ok]');
+        const sync = () => { ok.disabled = !input.value.trim(); };
+        sync();
+        input.oninput = sync;
+        input.onkeydown = (ev) => { if (ev.key === 'Enter' && !ok.disabled) ok.click(); };
+        s.el.querySelector('[data-x]').onclick = s.close;
+        ok.onclick = () => busy(ok, () => save(e, input.value.trim(), s));
+      };
+
+      // The reason row under a check-in or check-out.
+      const reasonCell = (e, attrs) => `<button class="cell" type="button" ${attrs}>
+          <span class="cell__label">${WHY[e.type].label}</span>
+          <span class="cell__detail cell__value${e.note ? '' : ' cell__add'}">${e.note ? esc(e.note) : 'Add'}</span>${CHEV}
+        </button>`;
+
       const paintNow = () => {
         const box = $('mnow');
         if (!box) return;
-        // Today's punches come newest first.
-        const last = (type) => (st.events || []).find((e) => e.type === type);
-        const why = (e) => (e && e.note ? ` · ${esc(e.note)}` : '');
-        const out = last('check_out');
-        const [state, sub] = st.checkedIn ? ['Checked in', `Since ${hm(st.since)}${why(last('check_in'))}`]
-          : out ? ['Checked out', `${hm(out.at)}${why(out)}`]
-          : ['Not checked in', 'You’re checked in automatically when you arrive.'];
+        // Today's punches, newest first: the latest says where they stand.
+        const last = (st.events || [])[0];
+        const [state, sub] = !last ? ['Not checked in', 'You’re checked in automatically when you arrive.']
+          : last.type === 'check_in' ? ['Checked in', `Since ${hm(st.checkedIn ? st.since : last.at)}`]
+          : ['Checked out', `Left at ${hm(last.at)}`];
         box.innerHTML = `
           <div class="cell"><span class="dot${st.checkedIn ? ' dot--in' : ''}"></span>
-            <span class="cell__main"><span class="cell__title state">${state}</span><span class="cell__sub">${sub}</span></span></div>`;
+            <span class="cell__main"><span class="cell__title state">${state}</span><span class="cell__sub">${sub}</span></span></div>
+          ${last ? reasonCell(last, 'id="mwhy"') : ''}`;
+        if (last) $('mwhy').onclick = () => askWhy(last);
       };
 
       const dayRow = (r) => {
@@ -851,11 +906,34 @@
           </button>
           <div class="punches" id="mpd-${esc(r.date)}" hidden></div>`;
       };
-      const punchRow = (e) => `<div class="cell"><span class="cell__main">
-          <span class="cell__title">${e.type === 'check_in' ? 'Checked in' : 'Checked out'}</span>
-          ${e.note ? `<span class="cell__sub">${esc(e.note)}</span>` : ''}</span>
-        <span class="cell__detail">${hm(e.at)}</span></div>`;
+      // Reasons can still be given for today and yesterday.
+      const punchRow = (e, editable) => {
+        const inner = `<span class="cell__main">
+            <span class="cell__title">${e.type === 'check_in' ? 'Checked in' : 'Checked out'}</span>
+            ${e.note ? `<span class="cell__sub">${esc(e.note)}</span>` : editable ? '<span class="cell__sub cell__add">Add reason</span>' : ''}</span>
+          <span class="cell__detail">${hm(e.at)}</span>`;
+        return editable ? `<button class="cell" type="button" data-punch="${esc(e.id)}">${inner}${CHEV}</button>` : `<div class="cell">${inner}</div>`;
+      };
       const note = (text, cls = '') => `<div class="cell"><span class="cell__sub ${cls}">${esc(text)}</span></div>`;
+
+      const openDay = async (el) => {
+        const day = el.dataset.day;
+        const box = $('mpd-' + day);
+        box.hidden = false;
+        el.setAttribute('aria-expanded', 'true');
+        MINE.openDay = day;
+        box.innerHTML = note('Loading…');
+        try {
+          const evs = (await api('/api/getMyEvents?' + new URLSearchParams({ from: day, to: day }))).slice().reverse();
+          const editable = day >= yesterday;
+          box.innerHTML = evs.length ? evs.map((e) => punchRow(e, editable)).join('') : note('Nothing recorded on this day.');
+          box.querySelectorAll('[data-punch]').forEach((b) => {
+            b.onclick = () => askWhy(evs.find((e) => String(e.id) === b.dataset.punch));
+          });
+        } catch (e) {
+          box.innerHTML = note(e.message, 'err');
+        }
+      };
 
       const list = async () => {
         const seq = ++MINE.seq;
@@ -878,21 +956,19 @@
           $('msum').textContent = rows.length ? span(rows.reduce((a, r) => a + minutesFor(r), 0)) : '';
           $('mdays').innerHTML = rows.length ? rows.map(dayRow).join('') : note('No hours on these dates.');
           $('mdays').querySelectorAll('[data-day]').forEach((el) => {
-            el.onclick = async () => {
+            el.onclick = () => {
               const box = $('mpd-' + el.dataset.day);
-              box.hidden = !box.hidden;
-              el.setAttribute('aria-expanded', String(!box.hidden));
-              if (box.hidden || box.dataset.loaded) return;
-              box.innerHTML = note('Loading…');
-              try {
-                const evs = await api('/api/getMyEvents?' + new URLSearchParams({ from: el.dataset.day, to: el.dataset.day }));
-                box.innerHTML = evs.length ? evs.slice().reverse().map(punchRow).join('') : note('Nothing recorded on this day.');
-                box.dataset.loaded = '1';
-              } catch (e) {
-                box.innerHTML = note(e.message, 'err');
+              if (!box.hidden) {
+                box.hidden = true;
+                el.setAttribute('aria-expanded', 'false');
+                MINE.openDay = null;
+                return;
               }
+              openDay(el);
             };
           });
+          const reopen = MINE.openDay && $('mdays').querySelector(`[data-day="${MINE.openDay}"]`);
+          if (reopen) openDay(reopen);
         } catch (e) {
           if (seq === MINE.seq && $('mdays')) $('mdays').innerHTML = note(e.message, 'err');
         }
@@ -1002,7 +1078,7 @@
               <select id="pf">
                 <option value="">Everyone today</option>
                 <option value="in">At work</option>
-                <option value="out">Gone home</option>
+                <option value="out">Out</option>
               </select>
               <span class="count" id="pcount"></span>
             </div>
@@ -1015,7 +1091,7 @@
           <div id="zmap"></div>
           <div class="legend">
             <span class="k"><span class="dot" style="background:var(--success)"></span> At work (${inNow})</span>
-            <span class="k"><span class="dot" style="background:var(--muted)"></span> Gone home</span>
+            <span class="k"><span class="dot" style="background:var(--muted)"></span> Out</span>
             <span class="k"><span class="dot" style="background:transparent;border:2px solid #8aa0a8"></span> Work zone</span>
           </div>
           <div class="map-hint">Each dot is where that person was when they arrived or left — phones report at the zone edge, not continuously.</div>
@@ -1043,7 +1119,7 @@
             ? `<div class="tablewrap"><table><thead><tr><th>Name</th><th></th><th>Since</th><th>Where</th></tr></thead><tbody>
               ${list.map((r) => `<tr>
                 <td><div style="font-weight:600">${esc(r.name || r.employeeRef)}</div></td>
-                <td>${r.checkedIn ? '<span class="pill complete">At work</span>' : '<span class="pill">Gone home</span>'}</td>
+                <td>${r.checkedIn ? '<span class="pill complete">At work</span>' : '<span class="pill">Out</span>'}${r.reason ? ` <span class="muted" style="font-size:.78rem">${esc(r.reason)}</span>` : ''}</td>
                 <td class="num">${timeOf(r.at)}</td>
                 <td>${whereText(r.lastLocation)}</td>
               </tr>`).join('')}</tbody></table></div>`
