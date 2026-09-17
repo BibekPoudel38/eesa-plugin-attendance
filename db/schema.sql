@@ -237,3 +237,15 @@ alter table events add column if not exists note text;
 -- When the workspace is working, on its own clock (the app's manager box hides outside it).
 alter table tenant_settings add column if not exists work_start time;
 alter table tenant_settings add column if not exists work_end time;
+
+-- Out for work: an errand away from the zone that keeps the shift running.
+create table if not exists work_outings (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id text not null,
+  employee_ref text not null,
+  reason text not null,
+  started_at timestamptz not null default now(),
+  ended_at timestamptz,
+  ended_how text
+);
+create index if not exists work_outings_open on work_outings (tenant_id, employee_ref) where ended_at is null;

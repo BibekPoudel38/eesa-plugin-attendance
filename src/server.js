@@ -449,6 +449,20 @@ app.post('/api/checkIn', emp, async (req, res) => {
   }
   res.json({ ok: true, data: { ...status, punch: punchOutcome(ev) } });
 });
+// Out for work: leaving the zone on a work errand keeps the shift running.
+app.post('/api/outForWork', emp, async (req, res) => {
+  const r = await db.startOuting(req.ctx.tenantId, req.ctx.sub, (req.body || {}).reason);
+  if (!r.ok) {
+    return res.status(r.code === 'REASON_REQUIRED' ? 400 : 409)
+      .json({ ok: false, error: { code: r.code, message: r.message } });
+  }
+  res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) });
+});
+app.post('/api/backFromWork', emp, async (req, res) => {
+  await db.endOuting(req.ctx.tenantId, req.ctx.sub, 'back');
+  res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) });
+});
+
 app.post('/api/checkOut', emp, async (req, res) => {
   const { zoneId = null, lat = null, lng = null, accuracyM = null, source = 'geofence', clientAt = null, note = null } = req.body || {};
   const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', {
