@@ -233,3 +233,7 @@ create table if not exists sent_summaries (
 
 -- Why somebody checked out or back in by hand ("Left my keys at home").
 alter table events add column if not exists note text;
+
+-- When the workspace is working, on its own clock (the app's manager box hides outside it).
+alter table tenant_settings add column if not exists work_start time;
+alter table tenant_settings add column if not exists work_end time;

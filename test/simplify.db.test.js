@@ -206,6 +206,15 @@ describe('simplified attendance on a real database', { skip }, () => {
     assert.equal(row.leftZoneAt, null);
   });
 
+  test('working hours default to 7 AM–10 PM, and a manager can change them', async () => {
+    assert.deepEqual(await db.getWorkingHours(T), { start: '07:00', end: '22:00' });
+    assert.equal((await db.setWorkingHours(T, { start: '6:00', end: '23:00' })).ok, false);
+    assert.equal((await db.setWorkingHours(T, { start: '06:30', end: '23:00' })).ok, true);
+    assert.deepEqual(await db.getWorkingHours(T), { start: '06:30', end: '23:00' });
+    assert.equal(await db.getTenantTimezone(T), TZ); // the timezone is left alone
+    assert.deepEqual((await db.getTenantSettings(T)).workingHours, { start: '06:30', end: '23:00' });
+  });
+
   test('a summary is sent once, however many times it is claimed', async () => {
     assert.equal(await db.claimSummary(T, 'daily', D2), true);
     assert.equal(await db.claimSummary(T, 'daily', D2), false);

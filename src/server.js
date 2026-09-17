@@ -568,10 +568,14 @@ app.get('/api/admin/settings', manager, async (req, res) =>
   res.json({ ok: true, data: await db.getTenantSettings(req.ctx.tenantId) }));
 app.put('/api/admin/settings', manager, async (req, res) => {
   const body = req.body || {};
+  if (body.workStart !== undefined || body.workEnd !== undefined) {
+    const r = await db.setWorkingHours(req.ctx.tenantId, { start: body.workStart, end: body.workEnd });
+    if (!r.ok) return res.status(400).json({ ok: false, error: { code: 'BAD_HOURS', message: r.problem } });
+  }
   // Only touch what was sent. Saving the timezone from the Setup screen must not
   // silently reset a notification policy the screen didn't show.
-  // The timezone is the only setting left: who is told what is no longer a
-  // choice anyone has to make.
+  // Timezone and working hours are the only settings left: who is told what is
+  // no longer a choice anyone has to make.
   res.json({ ok: true, data: await db.setTenantSettings(req.ctx.tenantId, {
     ...(body.timezone !== undefined ? { timezone: body.timezone } : {}),
   }) });
@@ -648,16 +652,21 @@ app.post('/api/admin/members/:employeeRef/nudge', manager, async (req, res) => {
 
 app.get('/api/admin/presence', manager, async (req, res) => {
   const tenantId = req.ctx.tenantId;
-  const [data, roster] = await Promise.all([
+  const [data, roster, workingHours, tz] = await Promise.all([
     db.presence(tenantId),
     fetchRoster(tenantId).catch(() => []),
+    db.getWorkingHours(tenantId),
+    db.getTenantTimezone(tenantId),
   ]);
   const byId = new Map(roster.map((u) => [String(u.id), u]));
   const employees = data.employees.map((e) => {
     const u = byId.get(String(e.employeeRef));
     return { ...e, name: (u && u.name) || e.name || '', email: (u && u.email) || '' };
   });
-  res.json({ ok: true, data: { ...data, employees } });
+  // The app's "people at work" box hides outside these unless someone is in.
+  res.json({ ok: true, data: {
+    ...data, employees, workingHours, duringWorkingHours: db.withinWorkingHours(workingHours, tz),
+  } });
 });
 
 // The raw punch log with positions — every event, where it was recorded, and

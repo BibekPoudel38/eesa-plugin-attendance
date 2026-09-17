@@ -3,7 +3,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { verifyOut, assignShiftDays, correctionProblem, dayFlags, localDay, exitFromAnotherZone } from '../src/db.js';
+import { verifyOut, assignShiftDays, correctionProblem, dayFlags, localDay, exitFromAnotherZone, withinWorkingHours } from '../src/db.js';
 
 const LA = 'America/Los_Angeles';
 const H = 60 * 60 * 1000;
@@ -179,5 +179,32 @@ describe('leaving a zone you are not in does not end the shift', () => {
     assert.equal(exitFromAnotherZone(inAt('chups'), 'check_in', { zoneId: 'dinesh', source: 'geofence' }), false);
     assert.equal(exitFromAnotherZone({ type: 'check_out', zone_id: 'chups' }, 'check_out', { zoneId: 'dinesh', source: 'geofence' }), false);
     assert.equal(exitFromAnotherZone(null, 'check_out', { zoneId: 'dinesh', source: 'geofence' }), false);
+  });
+});
+
+describe("working hours, on the restaurant's clock", () => {
+  const LA = 'America/Los_Angeles';
+  const hours = { start: '07:00', end: '22:00' };
+  const la = (hhmm) => new Date(`2026-09-17T${hhmm}:00-07:00`);
+  test('inside and outside a normal day', () => {
+    assert.equal(withinWorkingHours(hours, LA, la('06:59')), false);
+    assert.equal(withinWorkingHours(hours, LA, la('07:00')), true);
+    assert.equal(withinWorkingHours(hours, LA, la('21:59')), true);
+    assert.equal(withinWorkingHours(hours, LA, la('22:00')), false);
+  });
+  test("it is the workspace's clock, not the server's", () => {
+    // 14:30 UTC is 07:30 in Anaheim.
+    assert.equal(withinWorkingHours(hours, LA, new Date('2026-09-17T14:30:00Z')), true);
+    assert.equal(withinWorkingHours(hours, 'UTC', new Date('2026-09-17T06:30:00Z')), false);
+  });
+  test('hours that run past midnight', () => {
+    const late = { start: '18:00', end: '02:00' };
+    assert.equal(withinWorkingHours(late, LA, la('23:30')), true);
+    assert.equal(withinWorkingHours(late, LA, la('01:59')), true);
+    assert.equal(withinWorkingHours(late, LA, la('02:00')), false);
+    assert.equal(withinWorkingHours(late, LA, la('12:00')), false);
+  });
+  test('the same start and end means all day', () => {
+    assert.equal(withinWorkingHours({ start: '00:00', end: '00:00' }, LA, la('03:00')), true);
   });
 });

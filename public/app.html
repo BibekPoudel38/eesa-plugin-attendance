@@ -1364,6 +1364,12 @@
           <summary>${ic('sliders')} Workspace</summary>
           <label class="field" style="text-transform:none;letter-spacing:0;font-size:.8rem">Time zone — decides where one day ends and the next begins
             <input id="tz" value="${esc(settings.timezone || 'UTC')}" placeholder="e.g. America/Los_Angeles" style="max-width:280px;margin-top:4px"></label>
+          <label class="field" style="text-transform:none;letter-spacing:0;font-size:.8rem;margin-top:14px">Working hours — managers' "people at work" box in the app shows during these, or while anyone is still checked in
+            <span class="row" style="gap:8px;margin-top:4px;align-items:center">
+              <input type="time" id="whs" value="${esc((settings.workingHours || {}).start || '07:00')}" style="max-width:140px">
+              <span class="muted">to</span>
+              <input type="time" id="whe" value="${esc((settings.workingHours || {}).end || '22:00')}" style="max-width:140px">
+            </span></label>
           <div style="margin-top:14px"><button class="btn primary" id="tzsave">Save</button></div>
         </details>`;
 
@@ -1434,7 +1440,12 @@
 
       // --- workspace ---
       $('tzsave').onclick = async () => {
-        try { await api('/api/admin/settings', { method: 'PUT', body: { timezone: $('tz').value.trim() || 'UTC' } }); toast('Saved'); }
+        try {
+          await api('/api/admin/settings', { method: 'PUT', body: {
+            timezone: $('tz').value.trim() || 'UTC', workStart: $('whs').value, workEnd: $('whe').value,
+          } });
+          toast('Saved');
+        }
         catch (e) { toast(e.message, true); }
       };
 

@@ -448,6 +448,9 @@ export async function ensureSimplifyTables() {
     )`);
     // Why somebody checked out or back in by hand ("Left my keys at home").
     await pool.query(`alter table events add column if not exists note text`);
+    // When the workspace is working, on its own clock.
+    await pool.query(`alter table tenant_settings add column if not exists work_start time`);
+    await pool.query(`alter table tenant_settings add column if not exists work_end time`);
     return true;
   })().catch((e) => {
     _simplifyReady = null; // try again next time rather than caching a failure
@@ -1619,8 +1622,9 @@ async function ensureSettingsColumn() {
 
 export async function getTenantSettings(tenantId) {
   const timezone = await getTenantTimezone(tenantId);
+  const workingHours = await getWorkingHours(tenantId);
   if (!(await ensureSettingsColumn())) {
-    return { timezone, managerNotify: MANAGER_NOTIFY_DEFAULT, requireConfirmation: true };
+    return { timezone, workingHours, managerNotify: MANAGER_NOTIFY_DEFAULT, requireConfirmation: true };
   }
   const rows = await q(
     `select manager_notify, require_confirmation from tenant_settings where tenant_id = $1`,
@@ -1629,6 +1633,7 @@ export async function getTenantSettings(tenantId) {
   const v = rows[0]?.manager_notify;
   return {
     timezone,
+    workingHours,
     managerNotify: MANAGER_NOTIFY.includes(v) ? v : MANAGER_NOTIFY_DEFAULT,
     // Absent row → on. A workspace that has never opened the setting should get
     // the safer behaviour (someone vouches for the shift) rather than the
@@ -1897,6 +1902,54 @@ export async function displayName(tenantId, employeeRef) {
 export async function getTenantTimezone(tenantId) {
   const rows = await q(`select timezone from tenant_settings where tenant_id = $1`, [tenantId]);
   return rows[0]?.timezone || 'UTC';
+}
+
+/// When a workspace is working, on its own clock. A manager's "people at work"
+/// box in the app hides outside these hours unless somebody is still checked
+/// in. The default fits Chups: real shifts Jul–Sep 2026 mostly ran from about
+/// 9:20 AM, nine in ten were over by 10:35 PM, and an admin arrived at 7:11 AM.
+export const DEFAULT_WORKING_HOURS = Object.freeze({ start: '07:00', end: '22:00' });
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export async function getWorkingHours(tenantId) {
+  await ensureSimplifyTables();
+  const rows = await q(
+    `select to_char(work_start, 'HH24:MI') as s, to_char(work_end, 'HH24:MI') as e
+       from tenant_settings where tenant_id = $1`,
+    [tenantId],
+  );
+  const r = rows[0] || {};
+  return { start: r.s || DEFAULT_WORKING_HOURS.start, end: r.e || DEFAULT_WORKING_HOURS.end };
+}
+
+export async function setWorkingHours(tenantId, { start, end } = {}) {
+  if (!HHMM.test(String(start)) || !HHMM.test(String(end))) {
+    return { ok: false, problem: 'Enter both working-hours times as HH:MM.' };
+  }
+  await ensureSimplifyTables();
+  await q(
+    `insert into tenant_settings (tenant_id, timezone, work_start, work_end, updated_at)
+     values ($1, coalesce((select timezone from tenant_settings where tenant_id = $1), 'UTC'), $2::time, $3::time, now())
+     on conflict (tenant_id) do update
+       set work_start = excluded.work_start, work_end = excluded.work_end, updated_at = now()`,
+    [tenantId, start, end],
+  );
+  return { ok: true, workingHours: { start, end } };
+}
+
+/// Whether [now] is inside working hours on the workspace's clock. An end
+/// before the start runs past midnight (18:00–02:00); equal times mean all day.
+export function withinWorkingHours({ start, end }, tz, now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: tz || 'UTC', hourCycle: 'h23', hour: '2-digit', minute: '2-digit',
+  }).formatToParts(now);
+  const at = (type) => Number(parts.find((p) => p.type === type).value);
+  const mins = (hhmm) => { const [h, m] = String(hhmm).split(':').map(Number); return h * 60 + m; };
+  const t = at('hour') * 60 + at('minute');
+  const s = mins(start);
+  const e = mins(end);
+  if (s === e) return true;
+  return s < e ? t >= s && t < e : t >= s || t < e;
 }
 
 export async function setTenantTimezone(tenantId, timezone) {
