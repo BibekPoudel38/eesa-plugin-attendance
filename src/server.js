@@ -18,6 +18,7 @@ import { notifyUser, notifyUsers } from './notify.js';
 import { recordEvent } from './telemetry.js';
 import { startSummaries } from './summaries.js';
 import { spanOf } from './summary_plan.js';
+import { appRoleOf, uiRoleOf } from './roles.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANIFEST = JSON.parse(readFileSync(join(__dirname, '..', 'manifest.json'), 'utf-8'));
@@ -129,40 +130,6 @@ function isPlatformAdmin(ctx) {
   return String(ctx.role || '').toUpperCase() === 'ADMIN';
 }
 
-// The Eesa-owned "appRole" claim is the AUTHORITY for admin/staff/none — derived
-// server-side from the acting user's attendance positions (attendance-admin →
-// admin, attendance-required → staff, precedence admin > staff). The plugin's
-// own membership.role no longer decides access; the membership row survives only
-// to carry pay_rate/work_types. During rollout a platform tenant-admin whose
-// positions haven't been minted yet still bootstraps as admin so nobody is
-// locked out of management. Returns 'admin' | 'staff' | null.
-function appRoleOf(ctx) {
-  const claim = String(ctx.appRole || '').toLowerCase();
-  if (claim === 'admin') return 'admin';
-  if (claim === 'staff') return 'staff';
-  if (!claim && isPlatformAdmin(ctx)) return 'admin'; // bootstrap fallback
-  return null;
-}
-/// The roster's last word on somebody Eesa calls an admin.
-///
-/// Eesa's ADMIN role and this roster's role are different things and on the
-/// live workspace they disagree: an employee on an hourly rate carried ADMIN,
-/// which made them a manager HERE — able to approve and reject their
-/// colleagues' days and their pay, and told where each of them was.
-///
-/// So the roster wins where it has spoken. Only where it has: an admin the
-/// roster has never heard of — one who does not clock in — keeps everything,
-/// because on this workspace that is the only real administrator there is.
-/// Demoting them too would leave the product with no manager at all.
-function rosterDemotes(member) {
-  return Boolean(member && member.active !== false && member.role === 'staff');
-}
-// The UI shell branches on a 'manager' | 'staff' | null vocabulary; map onto it.
-function uiRoleOf(ctx, member) {
-  const r = appRoleOf(ctx);
-  if (r === 'admin' && rosterDemotes(member)) return 'staff';
-  return r === 'admin' ? 'manager' : r === 'staff' ? 'staff' : null;
-}
 function withMember({ manager = false } = {}) {
   return async (req, res, next) => {
     try {
@@ -177,18 +144,15 @@ function withMember({ manager = false } = {}) {
       // Flutter hot-path token may not, so we fall back to membership existence
       // there to avoid breaking check-in during rollout.
       const member = await db.getMembership(req.ctx.tenantId, req.ctx.sub);
-      const role = appRoleOf(req.ctx); // 'admin' | 'staff' | null (+platform bootstrap)
+      const role = appRoleOf(req.ctx); // 'admin' | 'staff' | null — Eesa's, see roles.js
       if (manager) {
         // appRole is the authority whenever the token carries the claim. The
         // legacy manager-membership fallback applies ONLY to tokens with no
         // appRole claim at all (the Flutter hot-path), so a user demoted to
         // staff in Eesa (appRole='staff') can never regain manager access via a
         // stale membership.role='manager' row.
-        const hasAppRoleClaim = req.ctx.appRole != null && String(req.ctx.appRole) !== '';
-        // ...and the roster still overrules it downward. Someone it lists as
-        // staff does not approve anybody's hours, whatever Eesa says.
-        const isManagerHere = role === 'admin' && !rosterDemotes(member);
-        if (!(isManagerHere || (!hasAppRoleClaim && member && member.role === 'manager'))) {
+        // Only Eesa's word: Management → Attendance. See roles.js.
+        if (role !== 'admin') {
           return res.status(403).json({ ok: false, error: { code: 'FORBIDDEN', message: 'Admin access required.' } });
         }
       } else if (!(role !== null || member)) {
@@ -219,11 +183,10 @@ app.get('/api/me', async (req, res) => {
   const admin = isPlatformAdmin(ctx);
   // appRole (Eesa authority) decides access; the membership row is kept only for
   // pay_rate/work_types and no longer drives role.
-  const uiRole = uiRoleOf(ctx, member);
-  // Report the role this person actually has HERE, so the app shows them the
-  // right screen. It used to answer with Eesa's word alone, which is how an
-  // hourly employee's phone offered them their colleagues' approvals.
-  const appRole = uiRole === 'staff' ? 'staff' : appRoleOf(ctx);
+  // Eesa's word, and only Eesa's — the same answer the page and every
+  // endpoint here use, so the app shows the screen the role allows.
+  const uiRole = uiRoleOf(ctx);
+  const appRole = appRoleOf(ctx);
   res.json({ ok: true, data: {
     appRole,                     // 'admin' | 'staff' | null (authority)
     role: uiRole,                // 'manager' | 'staff' | null (UI vocabulary)
@@ -957,11 +920,9 @@ app.get('/api/ui/context', authMiddleware({ surface: 'ui' }), async (req, res) =
     data: {
       tenant: req.ctx.tenantId,
       name: req.ctx.email || req.ctx.sub,
-      // Same roster rule as /api/me: this is what boot() branches on, so
-      // without it the plugin's own web UI still hands an hourly employee
-      // their colleagues' approvals screen.
-      appRole: uiRoleOf(req.ctx, member) === 'staff' ? 'staff' : appRoleOf(req.ctx),
-      role: uiRoleOf(req.ctx, member), // 'manager' | 'staff' | null
+      // What boot() branches on: Eesa's role, set in Management → Attendance.
+      appRole: appRoleOf(req.ctx),
+      role: uiRoleOf(req.ctx), // 'manager' | 'staff' | null
       isPlatformAdmin: admin,
       // Every time on this page is the restaurant's, whoever is looking and
       // wherever they are. From India, a 7:20 AM check-out read "07:50 PM".
