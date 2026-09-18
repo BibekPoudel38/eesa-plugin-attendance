@@ -18,7 +18,7 @@ import { notifyUser, notifyUsers } from './notify.js';
 import { recordEvent } from './telemetry.js';
 import { startSummaries } from './summaries.js';
 import { spanOf } from './summary_plan.js';
-import { appRoleOf, uiRoleOf } from './roles.js';
+import { appRoleOf, uiRoleOf, rosterRoleOf } from './roles.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANIFEST = JSON.parse(readFileSync(join(__dirname, '..', 'manifest.json'), 'utf-8'));
@@ -505,7 +505,7 @@ app.get('/api/admin/members', manager, async (req, res) => {
       email: u.email || (m && m.email) || '',
       role: (m && m.role) || null,
       // Who has attendance is decided in Eesa; the page shows it, it doesn't set it.
-      attendanceRole: u.attendanceRole || null,
+      attendanceRole: rosterRoleOf(u),
       // Whether their phone can record their hours on its own (absent until the
       // Eesa backend reports it; null = no phone has ever reported).
       ...(u.device !== undefined ? { device: u.device } : {}),

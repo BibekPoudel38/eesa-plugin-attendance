@@ -9,10 +9,19 @@
 /// A token with no claim at all answers "no role": Eesa has stamped the claim on
 /// every token since the attendance positions shipped.
 export function appRoleOf(ctx) {
-  const claim = String((ctx && ctx.appRole) || '').toLowerCase();
-  if (claim === 'admin') return 'admin';
-  if (claim === 'staff') return 'staff';
-  return null;
+  return roleFrom(ctx && ctx.appRole);
+}
+
+/// The same answer for a person on Eesa's roster. The roster says 'none' outright
+/// for somebody without attendance, and 'none' passed on is a truthy string: on
+/// 18 Sep the Today screen counted eleven such people as staff not in today.
+export function rosterRoleOf(user) {
+  return roleFrom(user && user.attendanceRole);
+}
+
+function roleFrom(value) {
+  const role = String(value || '').toLowerCase();
+  return role === 'admin' || role === 'staff' ? role : null;
 }
 
 /// The same answer in the page's older vocabulary.

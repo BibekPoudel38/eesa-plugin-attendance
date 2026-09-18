@@ -3,7 +3,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { appRoleOf, uiRoleOf } from '../src/roles.js';
+import { appRoleOf, uiRoleOf, rosterRoleOf } from '../src/roles.js';
 
 describe("roles come from Eesa's Management → Attendance and nowhere else", () => {
   test('an attendance admin in Eesa is an admin here', () => {
@@ -29,5 +29,15 @@ describe("roles come from Eesa's Management → Attendance and nowhere else", ()
     // here said "staff", and who was shown the staff page because of it.
     assert.equal(appRoleOf({ appRole: 'admin', member: { role: 'staff' } }), 'admin');
     assert.equal(appRoleOf.length, 1, 'decided from the token alone');
+  });
+
+  test("someone Eesa's roster lists as none is not enrolled", () => {
+    // 18 Sep: "Not in 29" on the Today screen, of whom eleven had no
+    // attendance at all. The roster says 'none'; passed on, that is a truthy
+    // string and every "is enrolled?" check on the page said yes.
+    assert.equal(rosterRoleOf({ attendanceRole: 'none' }), null);
+    assert.equal(rosterRoleOf({ attendanceRole: 'Staff' }), 'staff');
+    assert.equal(rosterRoleOf({ attendanceRole: 'admin' }), 'admin');
+    assert.equal(rosterRoleOf({}), null);
   });
 });
