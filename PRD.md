@@ -63,11 +63,19 @@ adds is why.
 
 ## What managers see
 
-- **Today:** how many are at work now, who is in, where they last were, their reason,
-  and which phones can't record hours yet.
-- **Timesheets:** the week per person, a day at a time; opening a day shows every punch
-  with its zone and reason, and lets the times be fixed, with Undo.
-- **Setup:** work zones, people, working hours, and the rest.
+The same page as staff, with four tabs:
+
+- **Today:** at work · out for work · not in; who is here now, with since when, the zone
+  and the reason; everyone else folded away; what needs the manager — days to fix and
+  phones not recording — only when there is something; and the team's hours this week.
+- **Staff:** everyone, searchable. A person's page shows where they stand, whether their
+  phone can record, today / yesterday / this week, the same filters and calendar, and
+  every check-in and check-out with its zone and reason, with **Fix times** (and Undo).
+  The week grid for payroll sits beside the list.
+- **Mine:** their own attendance, exactly as staff see theirs.
+- **Setup:** work zones, pay rates, working hours.
+- **Roles are Eesa's:** who is an admin and who is staff is set only in
+  Eesa AI → Management → Attendance. The attendance page shows it and cannot change it.
 - **Summaries instead of alerts:** one summary in the morning, and "timesheets ready" on
   Monday. No push per punch, and no approving a day at a time.
 
