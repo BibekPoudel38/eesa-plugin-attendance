@@ -400,6 +400,34 @@
     .cell__sub { display:block; font-size:15px; line-height:20px; letter-spacing:-.24px; color:var(--ios-2); }
     .cell__detail { color:var(--ios-2); font-variant-numeric:tabular-nums; white-space:nowrap; }
     .cell__label { flex:none; white-space:nowrap; }
+    .ok { color:var(--ios-green); }
+    .warnt { color:var(--ios-orange); }
+    body.ios .card { background:var(--ios-cell); border:0; border-radius:12px; box-shadow:none; padding:14px 16px; margin:0 0 22px; }
+    body.ios .card > h2 { font-size:13px; font-weight:400; letter-spacing:-.08px; color:var(--ios-2); margin:0 0 10px; }
+    body.ios .card > h2 .ic { display:none; }
+    body.ios .lead, body.ios .map-hint, body.ios .legend, body.ios .legendrow { color:var(--ios-2); font-size:13px; }
+    body.ios details.fold > summary { font-size:17px; font-weight:400; }
+    body.ios details.fold > summary .ic { display:none; }
+    body.ios input, body.ios select { background:var(--ios-fill); border:0; border-radius:8px; font-size:15px; color:var(--ios-label); }
+    body.ios input:focus, body.ios select:focus { box-shadow:0 0 0 2px var(--primary); }
+    body.ios .btn { border:0; background:var(--ios-fill); color:var(--primary); border-radius:8px; font-weight:600; }
+    body.ios .btn.primary { background:var(--primary); color:#fff; }
+    body.ios .btn.link { background:none; }
+    body.ios thead th { color:var(--ios-2); font-size:12px; font-weight:500; border-bottom:.5px solid var(--ios-sep); }
+    body.ios tbody td { border-bottom:.5px solid var(--ios-sep); }
+    body.ios tbody tr:hover { background:transparent; }
+    body.ios .chip { background:var(--ios-fill); border:0; }
+    body.ios .wk { border-bottom:.5px solid var(--ios-sep); }
+    body.ios .daycell { border:0; background:var(--ios-fill); color:var(--ios-label); border-radius:8px; }
+    body.ios .daycell:hover { box-shadow:inset 0 0 0 1.5px var(--primary); }
+    body.ios .daycell.none { background:transparent; color:var(--ios-3); }
+    body.ios .daycell.fix { background:rgba(255,149,0,.16); color:var(--ios-orange); }
+    body.ios .daycell.open { box-shadow:inset 0 0 0 1.5px var(--ios-green); }
+    body.ios .sheet { background:var(--ios-bg); }
+    body.ios .sheet .evidence { background:rgba(255,149,0,.12); }
+    body.ios .sheet .note { background:var(--ios-cell); }
+    body.ios .punches .wtwrap { margin-top:6px; }
+    #tbody .when { max-width:120px; text-align:right; }
     .cell--action { color:var(--primary); }
     .cell__value { flex:1 1 auto; min-width:0; text-align:right; overflow:hidden; text-overflow:ellipsis; }
     .punches .cell__title { font-size:15px; line-height:20px; }
@@ -1533,21 +1561,19 @@
             <div class="muted" style="font-size:.72rem;margin-top:8px">backend: ${esc(d.apiBase)} · secret set: ${d.hasSecret} · workspace: ${esc(d.tenantId || '—')} · status: ${d.status == null ? '—' : d.status}</div>
           </div>` : '';
 
-      host.innerHTML = banner + `<div class="card">
-        <h2>${ic('users')} People</h2>
-        <p class="lead">Everyone in your workspace. Who has attendance, and who is an admin, is set in Eesa AI → Management → Attendance, and only there. Phone shows whether their phone can record their hours by itself. The pay rate is what Timesheets use.</p>
+      host.innerHTML = banner + `
+        <div class="ihead"><span>People</span><span id="tcount"></span></div>
         ${rows.length ? `
-        <div class="toolbar">
-          <input class="search" id="tq" type="search" placeholder="Search name or email" autocomplete="off">
-          ${catalog.length ? `<select id="tjob">
-            <option value="">All job types</option>
+        <div class="ig">
+          <label class="cell"><input id="tq" type="search" placeholder="Search name or email" autocomplete="off"></label>
+          ${catalog.length ? `<label class="cell"><span class="cell__main">Job type</span><select id="tjob" class="when">
+            <option value="">All</option>
             ${catalog.map((w) => `<option value="${esc(w.id)}">${esc(w.name)}</option>`).join('')}
-            <option value="__none">No job types assigned</option>
-          </select>` : ''}
-          <span class="count" id="tcount"></span>
+            <option value="__none">None assigned</option>
+          </select></label>` : ''}
         </div>
-        <div id="tbody"></div>` : empty('users', 'No teammates found in your workspace roster.')}
-      </div>
+        <div class="ig" id="tbody"></div>` : `<div class="ig">${cellNote('No teammates found in your workspace roster.')}</div>`}
+        <p class="ifoot">Who is an admin and who is staff is set in Eesa AI → Management → Attendance, and only there. Tap a person for their pay and job types.</p>
       <details class="card fold">
         <summary>${ic('briefcase')} Job types</summary>
         <p class="lead">What people can say they're here to do when they check in. Assign them per person above.</p>
@@ -1577,38 +1603,40 @@
       // only changes what is drawn — never which control belongs to whom.
       // Whether this person's phone can record their hours with nobody touching
       // it — and if not, why, in words to pass on, with a Nudge that does.
-      const phoneCell = (u, i) => {
-        if (!u.attendanceRole || !('device' in u)) return '';
-        const dv = u.device;
-        if (dv && dv.ready) return '<span class="pill approved">Ready</span>';
-        return `<span class="pill pending">Not ready</span>
-          <div class="muted" style="font-size:.72rem;margin-top:4px;max-width:220px">${esc(dv ? dv.reason : 'Eesa AI hasn’t been opened on a phone yet')}</div>
-          <button class="btn link" data-nudge="${i}" type="button" style="padding:2px 0;font-size:.78rem">Nudge</button>`;
-      };
-
+      // One person: their role, whether their phone can record their hours by
+      // itself (and if not, why, with a Nudge that tells them), and — folded
+      // away — their pay and job types.
       const rowHtml = (u, i) => {
+        const dv = u.device;
+        const tracked = u.attendanceRole && 'device' in u;
+        const ready = Boolean(dv && dv.ready);
+        const phone = !tracked ? '' : ready ? 'Phone ready' : (dv ? dv.reason : 'Eesa AI hasn’t been opened on a phone yet');
+        const role = u.attendanceRole === 'admin' ? 'Admin' : u.attendanceRole === 'staff' ? 'Staff' : 'No attendance';
         const ids = u.workTypeIds || [];
         const jobs = catalog.map((w) => `<label class="wtchk"><input type="checkbox" data-wt="${i}" value="${esc(w.id)}" ${ids.includes(w.id) ? 'checked' : ''}> ${esc(w.name)}</label>`).join('');
-        return `<tr>
-          <td><div style="font-weight:600">${esc(u.name || u.email || u.employeeRef)}</div><div class="muted" style="font-size:.74rem">${esc(u.email || '')}</div></td>
-          <td>${u.attendanceRole === 'admin' ? '<span class="pill approved">Admin</span>' : u.attendanceRole === 'staff' ? '<span class="pill complete">Staff</span>' : '<span class="muted" style="font-size:.78rem">No attendance</span>'}</td>
-          <td>${phoneCell(u, i)}</td>
-          ${u.attendanceRole ? `<td><input id="p${i}" style="width:84px" type="number" min="0" step="0.5" value="${u.payRate == null ? '' : u.payRate}" placeholder="—"></td>
-          <td><button class="btn small primary" id="s${i}">Save</button></td>` : '<td></td><td></td>'}
-        </tr>
-        ${u.attendanceRole && catalog.length ? `<tr class="wtrow"><td colspan="5"><div class="muted" style="font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">Job types</div><div class="wtwrap">${jobs}</div></td></tr>` : ''}`;
+        return `<button class="cell" type="button" data-who="${i}" aria-expanded="false">
+            <span class="cell__main"><span class="cell__title">${esc(u.name || u.email || u.employeeRef)}</span>
+              <span class="cell__sub">${role}${phone ? ` · <span class="${ready ? 'ok' : 'warnt'}">${esc(phone)}</span>` : ''}</span></span>${CHEV}
+          </button>
+          <div class="punches" id="who-${i}" hidden>
+            ${tracked && !ready ? `<button class="cell cell--action" type="button" data-nudge="${i}">Nudge — tell them what to change</button>` : ''}
+            ${u.attendanceRole ? `<label class="cell"><span class="cell__main">Pay per hour</span>
+              <input class="when" id="p${i}" type="number" min="0" step="0.5" inputmode="decimal" value="${u.payRate == null ? '' : u.payRate}" placeholder="—"></label>` : ''}
+            ${u.attendanceRole && catalog.length ? `<div class="cell"><span class="cell__main"><span class="cell__sub">Job types</span><span class="wtwrap">${jobs}</span></span></div>` : ''}
+            ${u.attendanceRole ? `<button class="cell cell--action" type="button" id="s${i}">Save</button>` : ''}
+            ${u.email ? cellNote(u.email) : ''}
+          </div>`;
       };
 
       const bind = (u, i) => {
         if (!$('s' + i)) return;
         $('s' + i).onclick = async () => {
-          const role = u.role || (u.attendanceRole === 'admin' ? 'manager' : 'staff');
           const payRate = $('p' + i).value === '' ? null : Number($('p' + i).value);
           const workTypeIds = [...document.querySelectorAll('input[data-wt="' + i + '"]:checked')].map((c) => c.value);
           try {
-            await api('/api/admin/members', { method: 'POST', body: { employeeRef: u.employeeRef, role, payRate, name: u.name, email: u.email, workTypeIds } });
+            await api('/api/admin/members', { method: 'POST', body: { employeeRef: u.employeeRef, payRate, name: u.name, email: u.email, workTypeIds } });
             toast('Saved');
-            u.role = role; u.payRate = payRate; u.workTypeIds = workTypeIds;
+            u.payRate = payRate; u.workTypeIds = workTypeIds;
           } catch (e) { toast(e.message, true); }
         };
       };
@@ -1628,9 +1656,14 @@
           ? `${rows.length} ${rows.length === 1 ? 'person' : 'people'}`
           : `${matches.length} of ${rows.length}`;
         $('tbody').innerHTML = matches.length
-          ? `<table><thead><tr><th>Name</th><th>Attendance</th><th>Phone</th><th>Pay/hr</th><th></th></tr></thead><tbody>${matches.map(([u, i]) => rowHtml(u, i)).join('')}</tbody></table>`
-          : empty('users', 'Nobody matches those filters.');
+          ? matches.map(([u, i]) => rowHtml(u, i)).join('')
+          : cellNote('Nobody matches those filters.');
         matches.forEach(([u, i]) => bind(u, i));
+        $('tbody').querySelectorAll('[data-who]').forEach((b) => b.onclick = () => {
+          const box = $('who-' + b.dataset.who);
+          box.hidden = !box.hidden;
+          b.setAttribute('aria-expanded', String(!box.hidden));
+        });
         $('tbody').querySelectorAll('button[data-nudge]').forEach((b) => b.onclick = async () => {
           const u = rows[Number(b.dataset.nudge)];
           b.disabled = true;
@@ -1671,7 +1704,7 @@
             <td><button class="btn link" style="color:var(--danger)" data-z="${esc(z.id)}">Remove</button></td></tr>`).join('')}</tbody></table>`
             : empty('pin', 'No zones yet — add your first below.')}</div>
           ${hasMap ? `<div id="zmap" style="margin-top:12px"></div>
-            <div class="map-hint">Tap the map to place a zone, drag the teal dot to move it, drag the small white handle to resize.</div>` : ''}
+            <div class="map-hint">Tap the map to place a zone, drag the dot to move it, drag the small white handle to resize.</div>` : ''}
           <div class="row" style="margin-top:8px">
             <input id="zn" placeholder="Zone name" style="flex:1;min-width:150px">
             <input id="zlat" placeholder="lat" style="width:110px">
