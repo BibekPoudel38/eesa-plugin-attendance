@@ -1150,11 +1150,11 @@
         const ref = String(m.employeeRef);
         seen.add(ref);
         const p = punched.get(ref) || { employeeRef: ref, checkedIn: false, at: null, reason: null };
-        people.push({ ...p, name: m.name || p.name || m.email || ref, role: m.attendanceRole, device: m.device, todayMinutes: minutes.get(ref) ?? null });
+        people.push({ ...p, name: m.name || p.name || m.email || ref, role: m.attendanceRole, device: m.device, todayMinutes: p.todayMinutes ?? minutes.get(ref) ?? null });
       }
       // Somebody who punched but is no longer on the roster still has to appear.
       for (const [ref, p] of punched) {
-        if (!seen.has(ref)) people.push({ ...p, name: p.name || ref, todayMinutes: minutes.get(ref) ?? null });
+        if (!seen.has(ref)) people.push({ ...p, name: p.name || ref, todayMinutes: p.todayMinutes ?? minutes.get(ref) ?? null });
       }
       people.sort((a, b) => String(a.name).localeCompare(String(b.name)));
       return { people, presence };
@@ -1174,7 +1174,10 @@
       const here = [...of('in'), ...of('out'), ...of('onsite')];
       const fixes = week.filter((d) => d.needsFix).length;
       const blind = people.filter((p) => p.role === 'staff' && !(p.device && p.device.ready)).length;
-      const teamMinutes = week.reduce((n, d) => n + Number(d.totalMinutes || 0), 0);
+      // Today's rows are what has closed; a shift still running counts what it has run.
+      const sofar = new Map(people.map((p) => [String(p.employeeRef), p.todayMinutes]));
+      const today = todayTZ();
+      const teamMinutes = week.reduce((n, d) => n + Number((d.day === today ? sofar.get(String(d.employeeRef)) : null) ?? d.totalMinutes ?? 0), 0);
       const fold = (id, label, list) => (list.length ? `
         <button class="cell" type="button" data-fold="${id}" aria-expanded="false">
           <span class="cell__main">${label}</span><span class="cell__detail">${list.length}</span>${CHEV}</button>
@@ -1283,8 +1286,10 @@
       const live = (presence.employees || []).find((x) => String(x.employeeRef) === String(ref)) || { employeeRef: ref, checkedIn: false };
       const p = { ...live, name: m.name || live.name || m.email || ref, device: m.device, role: m.attendanceRole };
       const mine = recent.filter((d) => String(d.employeeRef) === String(ref));
-      const minutesOn = (d) => Number((mine.find((x) => x.day === d) || {}).totalMinutes || 0);
-      const weekSoFar = mine.filter((d) => d.day >= monday).reduce((n, d) => n + Number(d.totalMinutes || 0), 0);
+      // A day still running counts what it has run, not what has closed.
+      const liveOr = (day, stored) => (day === today && live.todayMinutes != null ? live.todayMinutes : Number(stored || 0));
+      const minutesOn = (d) => liveOr(d, (mine.find((x) => x.day === d) || {}).totalMinutes);
+      const weekSoFar = mine.filter((d) => d.day >= monday && d.day !== today).reduce((n, d) => n + Number(d.totalMinutes || 0), 0) + minutesOn(today);
       const s = stateOf(p);
       const zone = p.lastLocation && p.lastLocation.zoneName;
 
@@ -1352,10 +1357,10 @@
           const days = all.filter((d) => String(d.employeeRef) === String(ref))
             .sort((a, b) => b.day.localeCompare(a.day));
           PERSON.days = days;
-          $('psum').textContent = days.length ? span(days.reduce((n, d) => n + Number(d.totalMinutes || 0), 0)) : '';
+          $('psum').textContent = days.length ? span(days.reduce((n, d) => n + liveOr(d.day, d.totalMinutes), 0)) : '';
           $('pdays').innerHTML = days.length
             ? days.map((d) => dayCell({ date: d.day, firstIn: d.firstIn, lastOut: d.lastOut, status: d.open ? 'open' : 'complete' },
-                d.totalMinutes, { id: 'ppd-', flag: d.needsFix ? 'Needs a fix' : d.corrected ? 'Changed by a manager' : '' })).join('')
+                liveOr(d.day, d.totalMinutes), { id: 'ppd-', flag: d.needsFix ? 'Needs a fix' : d.corrected ? 'Changed by a manager' : '' })).join('')
             : cellNote('No hours on these dates.');
           $('pdays').querySelectorAll('[data-day]').forEach((el) => {
             el.onclick = () => {
@@ -1399,11 +1404,14 @@
     async function weekGrid(host) {
       const [from, to] = weekRange(WEEK);
       const days = [0, 1, 2, 3, 4, 5, 6].map((i) => addDaysYmd(from, i));
-      const [approvals, members] = await Promise.all([
+      const today = todayTZ();
+      const [approvals, members, presence] = await Promise.all([
         api('/api/admin/approvals?' + new URLSearchParams({ from, to })),
         api('/api/admin/members').catch(() => []),
+        to >= today ? api('/api/admin/presence').catch(() => ({})) : {},
       ]);
-      const today = todayTZ();
+      // A shift still running shows what it has run, not what has closed.
+      const sofar = new Map((presence.employees || []).map((e) => [String(e.employeeRef), e.todayMinutes]));
       const byRef = new Map();
       const person = (ref, name) => {
         if (!byRef.has(ref)) byRef.set(ref, { ref, name: name || ref, days: {} });
@@ -1428,7 +1436,7 @@
         const d = p.days[day];
         const attrs = `data-ref="${esc(p.ref)}" data-day="${day}"`;
         if (!d) return `<button class="daycell none" ${attrs} ${day > today ? 'disabled' : ''} title="Nothing recorded">–</button>`;
-        if (d.open) return `<button class="daycell open" ${attrs} title="At work now">${dur(d.totalMinutes)}</button>`;
+        if (d.open) return `<button class="daycell open" ${attrs} title="At work now">${dur((day === today ? sofar.get(p.ref) : null) ?? d.totalMinutes)}</button>`;
         if (d.needsFix) return `<button class="daycell fix" ${attrs} title="Needs a fix">${d.totalMinutes ? dur(d.totalMinutes) : 'Fix'}</button>`;
         const edited = d.corrected ? ' changed' : '';
         return `<button class="daycell${edited}" ${attrs} ${d.corrected ? 'title="Changed by a manager"' : ''}>${dur(d.totalMinutes)}</button>`;

@@ -283,6 +283,17 @@ describe('simplified attendance on a real database', { skip }, () => {
     assert.equal((await dayRow('53', D3)).totalMinutes, 120);
   });
 
+  test("the manager's list counts a shift still running, as their own page does", async () => {
+    // 18 Sep: Today read "Since 9:20 AM ... 0m" for Jeeva at 11:30. It printed
+    // the stored day total, written when his punch arrived: 0, at the start.
+    await punch('61', 'check_in', new Date(Date.now() - 20 * 60e3).toISOString());
+    await db.pool.query(`update day_summaries set total_minutes = 0 where tenant_id = $1 and employee_ref = '61'`, [T]);
+    const row = (await db.presence(T)).employees.find((e) => e.employeeRef === '61');
+    const own = await db.myStatus(T, '61');
+    assert.ok(row.todayMinutes >= 19 && row.todayMinutes <= 21, `got ${row.todayMinutes}`);
+    assert.equal(row.todayMinutes, own.todayMinutes, 'one number for one shift');
+  });
+
   test('a summary is sent once, however many times it is claimed', async () => {
     assert.equal(await db.claimSummary(T, 'daily', D2), true);
     assert.equal(await db.claimSummary(T, 'daily', D2), false);

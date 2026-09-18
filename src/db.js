@@ -1202,9 +1202,19 @@ export async function presence(tenantId) {
     ),
     listZones(tenantId),
   ]);
+  // A shift still running has a stored day total of only what has closed:
+  // nothing, for one that began this morning. The Today screen printed that
+  // "0m" beside "Since 9:20 AM" (18 Sep). So an open day is recounted from its
+  // punches, as the person's own page does; the stored figure stays the one
+  // that is approved.
+  const today = localDay(Date.now(), tz);
+  const running = await Promise.all(rows.map((r) =>
+    (r.type === 'check_in' || isReason(r.reason, REASON.outsideWork)
+      ? shiftEvents(tenantId, r.employee_ref, today).then((ev) => computeToday(ev).totalMinutes)
+      : null)));
   return {
     zones,
-    employees: rows.map((r) => {
+    employees: rows.map((r, i) => {
       const loc = locationOut(r);
       const v = verifyOut(loc, { type: r.located_type, source: r.located_source });
       return {
@@ -1222,6 +1232,8 @@ export async function presence(tenantId) {
         lastLocation: loc ? { ...loc, at: iso(r.located_at) } : null,
         verification: v.state,
         verificationReason: v.reason,
+        // Today's hours so far, while their day is still open.
+        todayMinutes: running[i],
       };
     }),
   };
