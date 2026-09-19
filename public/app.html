@@ -442,6 +442,14 @@
     .sum { display:grid; grid-template-columns:repeat(3, 1fr); }
     .sum > div { position:relative; padding:10px 12px 12px; }
     .sum > div + div::before { content:''; position:absolute; left:0; top:12px; bottom:12px; width:.5px; background:var(--ios-sep); }
+    /* On a person's page the three tiles are what the list below shows. */
+    .sum > button { position:relative; display:block; margin:0; padding:10px 12px 12px; border:0; background:none; font:inherit; color:inherit; text-align:left; cursor:pointer; -webkit-tap-highlight-color:transparent; }
+    .sum > button > span { display:block; }
+    .sum > button + button::before { content:''; position:absolute; left:0; top:12px; bottom:12px; width:.5px; background:var(--ios-sep); }
+    .sum > button.active { background:var(--ios-fill); }
+    .sum > button.active::before, .sum > button.active + button::before { display:none; }
+    .sum > button.active .sum__l { color:var(--primary); font-weight:600; }
+    .sum > button:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
     .sum__l { font-size:13px; letter-spacing:-.08px; color:var(--ios-2); }
     .sum__n { margin-top:2px; font-family:ui-rounded, -apple-system, system-ui, sans-serif; font-size:22px; font-weight:700; letter-spacing:.35px; font-variant-numeric:tabular-nums; white-space:nowrap; }
     .seg { display:grid; grid-auto-flow:column; grid-auto-columns:1fr; padding:2px; margin:0 0 22px; border-radius:9px; background:var(--ios-fill); }
@@ -836,13 +844,65 @@
       : SPAN_FMT.formatRange ? SPAN_FMT.formatRange(utcDay(f), utcDay(t))
       : `${SPAN_FMT.format(utcDay(f))} – ${SPAN_FMT.format(utcDay(t))}`);
 
-    const MINE = { period: 'week', from: null, to: null, seq: 0, openDay: null, refresh: null };
-    const MINE_PERIODS = {
-      week: ['This Week', () => [weekRange(0)[0], todayTZ()]],
-      last: ['Last Week', () => weekRange(-1)],
-      month: ['This Month', () => { const t = todayTZ(); return [t.slice(0, 8) + '01', t]; }],
-      custom: ['Custom', () => [MINE.from, MINE.to]],
+    const MINE = { period: 'custom', from: null, to: null, seq: 0, openDay: null, refresh: null };
+
+    // A person's page, theirs or a manager's view of it: Today, Yesterday and
+    // This Week are the tiles themselves, and tapping one lists its days — a
+    // single day opened on its check-ins and check-outs. Below them one date
+    // range, a month back by default, for everything else.
+    const PERIODS = {
+      today: () => { const t = todayTZ(); return [t, t]; },
+      yesterday: () => { const y = addDaysYmd(todayTZ(), -1); return [y, y]; },
+      week: () => [weekRange(0)[0], todayTZ()],
     };
+    const rangeOf = (S) => (PERIODS[S.period] ? PERIODS[S.period]() : [S.from, S.to]);
+    // The same date a month earlier, or that month's last day when it is
+    // shorter: a month back from 31 March is 28 or 29 February.
+    const monthBack = (d) => {
+      const [y, m, dd] = ymdParts(d);
+      const last = new Date(Date.UTC(y, m - 1, 0)).getUTCDate();
+      return new Date(Date.UTC(y, m - 2, Math.min(dd, last))).toISOString().slice(0, 10);
+    };
+    // A single-day tile opens that day; say so when it has nothing.
+    const emptyNote = (S) => (S.period === 'today' ? 'Nothing recorded today.'
+      : S.period === 'yesterday' ? 'Nothing recorded yesterday.' : 'No hours on these dates.');
+    const openOnList = (S, from, to) => (from === to && PERIODS[S.period] ? from : S.openDay);
+    /** The tiles and the dates of one page; `p` is its id prefix. */
+    function wireRange(p, S, list) {
+      if (!S.from) { const t = todayTZ(); [S.from, S.to] = [monthBack(t), t]; }
+      const tiles = $(p + 'tiles').querySelectorAll('[data-p]');
+      const paint = () => {
+        tiles.forEach((b) => {
+          const on = b.dataset.p === S.period;
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-selected', String(on));
+        });
+        const [f, t] = rangeOf(S);
+        $(p + 'from').value = f;
+        $(p + 'to').value = t;
+      };
+      tiles.forEach((b) => {
+        b.onclick = () => {
+          // The one showing, tapped again, goes back to the dates below.
+          S.period = S.period === b.dataset.p ? 'custom' : b.dataset.p;
+          S.openDay = null;
+          paint();
+          list();
+        };
+      });
+      const pick = () => {
+        const f = $(p + 'from').value, t = $(p + 'to').value;
+        if (!f || !t) return;
+        // A backwards range would read as "no hours", so swap it.
+        [S.from, S.to] = f <= t ? [f, t] : [t, f];
+        S.period = 'custom';
+        paint();
+        list();
+      };
+      $(p + 'from').onchange = pick;
+      $(p + 'to').onchange = pick;
+      paint();
+    }
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && TAB === 'me' && MINE.refresh) MINE.refresh();
     });
@@ -892,16 +952,14 @@
 
       $('view').innerHTML = `
         <div class="ig" id="mnow"></div>
-        <div class="ig sum">
-          <div><div class="sum__l">Today</div><div class="sum__n" id="mtoday"></div></div>
-          <div><div class="sum__l">Yesterday</div><div class="sum__n">${span(minutesOn(yesterday))}</div></div>
-          <div><div class="sum__l">This Week</div><div class="sum__n" id="mweek"></div></div>
+        <div class="ig sum" id="mtiles" role="tablist" aria-label="Show">
+          <button type="button" role="tab" data-p="today"><span class="sum__l">Today</span><span class="sum__n" id="mtoday"></span></button>
+          <button type="button" role="tab" data-p="yesterday"><span class="sum__l">Yesterday</span><span class="sum__n">${span(minutesOn(yesterday))}</span></button>
+          <button type="button" role="tab" data-p="week"><span class="sum__l">This Week</span><span class="sum__n" id="mweek"></span></button>
         </div>
-        <div class="seg" id="mp" role="tablist" aria-label="Period">${Object.entries(MINE_PERIODS).map(([k, [label]]) =>
-          `<button type="button" role="tab" data-p="${k}">${label}</button>`).join('')}</div>
-        <div class="ig" id="mdates" hidden>
-          <label class="cell"><span class="cell__main">From</span><input class="when" type="date" id="mfrom"></label>
-          <label class="cell"><span class="cell__main">To</span><input class="when" type="date" id="mto"></label>
+        <div class="ig" id="mdates">
+          <div class="cell"><span class="cell__main">Dates</span>
+            <input class="when" type="date" id="mfrom" aria-label="From"><span class="cell__sub" aria-hidden="true">–</span><input class="when" type="date" id="mto" aria-label="To"></div>
         </div>
         <div class="ihead"><span id="mrange"></span><span id="msum"></span></div>
         <div class="ig" id="mdays"></div>`;
@@ -1014,13 +1072,7 @@
 
       const list = async () => {
         const seq = ++MINE.seq;
-        const [from, to] = MINE_PERIODS[MINE.period][1]();
-        $('mp').querySelectorAll('button').forEach((b) => {
-          const on = b.dataset.p === MINE.period;
-          b.classList.toggle('active', on);
-          b.setAttribute('aria-selected', String(on));
-        });
-        $('mdates').hidden = MINE.period !== 'custom';
+        const [from, to] = rangeOf(MINE);
         $('mrange').textContent = rangeName(from, to);
         shown = [];
         $('msum').textContent = '';
@@ -1031,7 +1083,7 @@
           const rows = ((data && data.days) || []).filter((r) => Number(r.totalMinutes) > 0 || r.firstIn);
           shown = rows;
           $('msum').textContent = rows.length ? span(rows.reduce((a, r) => a + minutesFor(r), 0)) : '';
-          $('mdays').innerHTML = rows.length ? rows.map((r) => dayCell(r, minutesFor(r))).join('') : cellNote('No hours on these dates.');
+          $('mdays').innerHTML = rows.length ? rows.map((r) => dayCell(r, minutesFor(r))).join('') : cellNote(emptyNote(MINE));
           $('mdays').querySelectorAll('[data-day]').forEach((el) => {
             el.onclick = () => {
               const box = $('mpd-' + el.dataset.day);
@@ -1044,31 +1096,15 @@
               openPunches(el);
             };
           });
-          const reopen = MINE.openDay && $('mdays').querySelector(`[data-day="${MINE.openDay}"]`);
+          const open = openOnList(MINE, from, to);
+          const reopen = open && $('mdays').querySelector(`[data-day="${open}"]`);
           if (reopen) openPunches(reopen);
         } catch (e) {
           if (seq === MINE.seq && $('mdays')) $('mdays').innerHTML = cellNote(e.message, 'err');
         }
       };
 
-      $('mp').querySelectorAll('button').forEach((b) => {
-        b.onclick = () => {
-          if (b.dataset.p === 'custom' && !MINE.from) [MINE.from, MINE.to] = MINE_PERIODS[MINE.period][1]();
-          MINE.period = b.dataset.p;
-          if (MINE.period === 'custom') { $('mfrom').value = MINE.from; $('mto').value = MINE.to; }
-          list();
-        };
-      });
-      const pick = () => {
-        const f = $('mfrom').value, t = $('mto').value;
-        if (!f || !t) return;
-        // A backwards range would read as "no hours", so swap it.
-        [MINE.from, MINE.to] = f <= t ? [f, t] : [t, f];
-        list();
-      };
-      $('mfrom').onchange = pick;
-      $('mto').onchange = pick;
-      if (MINE.from) { $('mfrom').value = MINE.from; $('mto').value = MINE.to; }
+      wireRange('m', MINE, list);
 
       // Back in the app after a while: the phone may have checked them in or out.
       // Not while something is being asked.
@@ -1271,7 +1307,7 @@
     };
 
     // ---- One person: where they stand, their hours, and their days ----------
-    const PERSON = { period: 'week', from: null, to: null, openDay: null, seq: 0 };
+    const PERSON = { period: 'custom', from: null, to: null, openDay: null, seq: 0 };
 
     async function personPage(ref) {
       const today = todayTZ();
@@ -1302,16 +1338,14 @@
           ${p.device ? `<div class="cell"><span class="cell__label">Phone</span>
             <span class="cell__detail cell__value">${p.device.ready ? 'Ready' : esc(p.device.reason)}</span></div>` : ''}
         </div>
-        <div class="ig sum">
-          <div><div class="sum__l">Today</div><div class="sum__n">${span(minutesOn(today))}</div></div>
-          <div><div class="sum__l">Yesterday</div><div class="sum__n">${span(minutesOn(yesterday))}</div></div>
-          <div><div class="sum__l">This Week</div><div class="sum__n">${span(weekSoFar)}</div></div>
+        <div class="ig sum" id="ptiles" role="tablist" aria-label="Show">
+          <button type="button" role="tab" data-p="today"><span class="sum__l">Today</span><span class="sum__n">${span(minutesOn(today))}</span></button>
+          <button type="button" role="tab" data-p="yesterday"><span class="sum__l">Yesterday</span><span class="sum__n">${span(minutesOn(yesterday))}</span></button>
+          <button type="button" role="tab" data-p="week"><span class="sum__l">This Week</span><span class="sum__n">${span(weekSoFar)}</span></button>
         </div>
-        <div class="seg" id="pp" role="tablist" aria-label="Period">${Object.entries(MINE_PERIODS).map(([k, [label]]) =>
-          `<button type="button" role="tab" data-p="${k}">${label}</button>`).join('')}</div>
-        <div class="ig" id="pdates" hidden>
-          <label class="cell"><span class="cell__main">From</span><input class="when" type="date" id="pfrom"></label>
-          <label class="cell"><span class="cell__main">To</span><input class="when" type="date" id="pto"></label>
+        <div class="ig" id="pdates">
+          <div class="cell"><span class="cell__main">Dates</span>
+            <input class="when" type="date" id="pfrom" aria-label="From"><span class="cell__sub" aria-hidden="true">–</span><input class="when" type="date" id="pto" aria-label="To"></div>
         </div>
         <div class="ihead"><span id="prange"></span><span id="psum"></span></div>
         <div class="ig" id="pdays"></div>`;
@@ -1341,13 +1375,7 @@
 
       const list = async () => {
         const seq = ++PERSON.seq;
-        const [from, to] = MINE_PERIODS[PERSON.period][1]();
-        $('pp').querySelectorAll('button').forEach((b) => {
-          const on = b.dataset.p === PERSON.period;
-          b.classList.toggle('active', on);
-          b.setAttribute('aria-selected', String(on));
-        });
-        $('pdates').hidden = PERSON.period !== 'custom';
+        const [from, to] = rangeOf(PERSON);
         $('prange').textContent = rangeName(from, to);
         $('psum').textContent = '';
         $('pdays').innerHTML = cellNote('Loading…');
@@ -1361,7 +1389,7 @@
           $('pdays').innerHTML = days.length
             ? days.map((d) => dayCell({ date: d.day, firstIn: d.firstIn, lastOut: d.lastOut, status: d.open ? 'open' : 'complete' },
                 liveOr(d.day, d.totalMinutes), { id: 'ppd-', flag: d.needsFix ? 'Needs a fix' : d.corrected ? 'Changed by a manager' : '' })).join('')
-            : cellNote('No hours on these dates.');
+            : cellNote(emptyNote(PERSON));
           $('pdays').querySelectorAll('[data-day]').forEach((el) => {
             el.onclick = () => {
               const box = $('ppd-' + el.dataset.day);
@@ -1369,30 +1397,15 @@
               openPunches(el);
             };
           });
-          const again = PERSON.openDay && $('pdays').querySelector(`[data-day="${PERSON.openDay}"]`);
+          const open = openOnList(PERSON, from, to);
+          const again = open && $('pdays').querySelector(`[data-day="${open}"]`);
           if (again) openPunches(again);
         } catch (e) {
           if (seq === PERSON.seq && $('pdays')) $('pdays').innerHTML = cellNote(e.message, 'err');
         }
       };
 
-      $('pp').querySelectorAll('button').forEach((b) => {
-        b.onclick = () => {
-          if (b.dataset.p === 'custom' && !PERSON.from) [PERSON.from, PERSON.to] = MINE_PERIODS[PERSON.period][1]();
-          PERSON.period = b.dataset.p;
-          if (PERSON.period === 'custom') { $('pfrom').value = PERSON.from; $('pto').value = PERSON.to; }
-          list();
-        };
-      });
-      const pick = () => {
-        const f = $('pfrom').value, t = $('pto').value;
-        if (!f || !t) return;
-        [PERSON.from, PERSON.to] = f <= t ? [f, t] : [t, f];
-        list();
-      };
-      $('pfrom').onchange = pick;
-      $('pto').onchange = pick;
-      if (PERSON.from) { $('pfrom').value = PERSON.from; $('pto').value = PERSON.to; }
+      wireRange('p', PERSON, list);
       list();
     }
 
