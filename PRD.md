@@ -86,6 +86,41 @@ in the logs carries its zone, with one colour per zone, so a day spent at two pl
 reads at a glance. The colour follows the zone's **name**, because editing a zone creates
 a new one with the same name.
 
+## Recording guarantees
+
+Hours are pay, so every punch has to be recorded, recorded once, and at the time it
+happened, whether or not the server can be reached.
+
+- **Saved on the phone first.** A crossing is written to the phone before anything is
+  sent, and removed only when the server has settled it. The app being closed mid-send,
+  no signal, or the server being down costs a delay, never the punch.
+- **Sent in order.** Saved punches go oldest first and stop at the first that can't get
+  through. An arrival that overtook an older departure would be dropped as "already in".
+- **Sent as soon as possible.** At the next zone crossing, whenever Eesa opens, and every
+  two minutes while it is open.
+- **The time is when it happened.** The time the phone woke for the crossing, not when a
+  GPS fix or the network arrived. The phone also sends what its clock reads as it sends;
+  the server measures the clock's error from that and corrects the punch, so a phone set
+  wrong still files the right time. A saved punch keeps its time for up to 7 days; older
+  than that it is refused (PUNCH_TOO_OLD) for a manager to fix, never moved to today.
+- **Recorded once.** Each punch carries the phone's own id for it. A punch that arrives
+  twice, because an answer was lost, is recorded once. Builds without ids are matched on
+  the same type at the same second.
+- **Traceable.** Every row keeps that id, the trace of the request that delivered it,
+  when the server received it, how far the phone's clock was out, and how old its fix
+  was. The id begins with the trace of the crossing on the phone, so any row leads back
+  to that phone's log of what it did.
+- **A phone that can't record says so.** Anyone with attendance whose phone has
+  attendance off, location not set to Always, or Precise Location off is asked on
+  opening Eesa, with one button, until it is fixed. Each time is logged with the reason.
+- **Stored so a locked phone can use it.** A punch is made from a pocket; the app's
+  attendance storage is readable after the first unlock since the phone started.
+
+What no phone can do: iOS reports leaving a zone only once the phone is a few hundred
+metres past its edge, and a saved punch is sent only when the app next runs. If Eesa is
+opened away from every zone while the record still says "at work", the phone records the
+departure itself.
+
 ## What it deliberately does not do
 
 - No check-in or check-out button for staff, anywhere.
@@ -105,8 +140,10 @@ a new one with the same name.
 
 ## Open items
 
-- Build 87 of the app (version 1.33.1) is uploaded to App Store Connect and needs
-  submitting for review; until then staff reach the page from the side menu.
+- Build 90 of the app (version 1.34.0) is uploaded to App Store Connect and needs
+  submitting for review. It includes everything in builds 87–89.
+- The server doesn't yet know when a phone has Precise Location off; the phone asks
+  the person to fix it, but the manager's "Phones not recording" can't show it.
 - Automatic punches carry no reason unless somebody sets one. Asking from the arrival
   notification itself would need an app release.
 - Android has no automatic check-in.
