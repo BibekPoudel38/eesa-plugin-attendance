@@ -54,8 +54,8 @@ export function setupNudge(device) {
       return { title, body: 'Open Eesa AI once so it can check your attendance setup.' };
     case 'attendance_off':
     case 'no_phone':
-      return { title, body: 'Open Eesa AI › Settings › Attendance and turn it on.' };
+      return { title, body: 'Open Eesa AI › Settings › Location and turn attendance on.' };
     default:
-      return { title, body: 'Open Eesa AI › Settings › Attendance and tap Check my setup.' };
+      return { title, body: 'Open Eesa AI › Settings › Location and tap Check my setup.' };
   }
 }

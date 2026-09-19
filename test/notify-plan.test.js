@@ -60,8 +60,8 @@ describe('a nudge names the one thing to change', () => {
     assert.match(setupNudge({ code: 'not_seen' }).body, /Open Eesa AI once/);
   });
   test('attendance off, or no phone at all, is turned on in the app', () => {
-    assert.match(setupNudge({ code: 'attendance_off' }).body, /Settings › Attendance and turn it on/);
-    assert.match(setupNudge(null).body, /Settings › Attendance and turn it on/);
+    assert.match(setupNudge({ code: 'attendance_off' }).body, /Settings › Location and turn attendance on/);
+    assert.match(setupNudge(null).body, /Settings › Location and turn attendance on/);
   });
   test('anything else runs the built-in check', () => {
     assert.match(setupNudge({ code: 'no_zones' }).body, /Check my setup/);
