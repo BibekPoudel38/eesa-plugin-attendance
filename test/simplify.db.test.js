@@ -294,6 +294,50 @@ describe('simplified attendance on a real database', { skip }, () => {
     assert.equal(row.todayMinutes, own.todayMinutes, 'one number for one shift');
   });
 
+  test('the same punch sent twice is recorded once, by the phone\'s id for it', async () => {
+    // The phone keeps a punch until the server confirms it. An answer lost on
+    // the way back means it is sent again, and it must still be one punch.
+    const when = new Date(Date.now() - 50 * 60e3).toISOString();
+    const first = await punch('70', 'check_in', when, { clientId: 'trace-a:zone' });
+    const again = await punch('70', 'check_in', when, { clientId: 'trace-a:zone' });
+    assert.ok(first.id);
+    assert.equal(again.id, null);
+    assert.equal(again.replayed, true);
+    const n = await db.pool.query(`select count(*)::int n from events where tenant_id = $1 and employee_ref = '70'`, [T]);
+    assert.equal(n.rows[0].n, 1);
+  });
+
+  test('a resend from an older build, with no id, is one punch as well', async () => {
+    const when = new Date(Date.now() - 40 * 60e3).toISOString();
+    await punch('71', 'check_in', when);
+    const again = await punch('71', 'check_in', when);
+    assert.equal(again.replayed, true);
+    const n = await db.pool.query(`select count(*)::int n from events where tenant_id = $1 and employee_ref = '71'`, [T]);
+    assert.equal(n.rows[0].n, 1);
+  });
+
+  test('a day kept on the phone through an outage lands on its own day, at its own times', async () => {
+    const D = daysAgo(4);
+    await punch('72', 'check_in', zoned(D, '09:00'), { clientId: 'out-1:zone' });
+    await punch('72', 'check_out', zoned(D, '17:00'), { clientId: 'out-2:zone' });
+    const r = await dayRow('72', D);
+    assert.equal(r.totalMinutes, 480);
+  });
+
+  test('every new punch says when it arrived, which trace brought it, and the phone clock', async () => {
+    await punch('73', 'check_in', new Date(Date.now() - 30 * 60e3).toISOString(),
+      { clientId: 'trace-b:zone', traceId: 'trace-b', skewMs: -600000, fixAgeMs: 4200 });
+    const row = (await db.pool.query(
+      `select client_id, trace_id, clock_skew_ms, fix_age_ms, received_at from events where tenant_id = $1 and employee_ref = '73'`, [T])).rows[0];
+    assert.equal(row.client_id, 'trace-b:zone');
+    assert.equal(row.trace_id, 'trace-b');
+    assert.equal(Number(row.clock_skew_ms), -600000);
+    assert.equal(Number(row.fix_age_ms), 4200);
+    assert.ok(row.received_at, 'received_at is set on arrival');
+    const shown = (await db.myEvents(T, '73', { days: 2 }))[0];
+    assert.ok(shown.receivedAt, 'and the manager page can see it');
+  });
+
   test('a summary is sent once, however many times it is claimed', async () => {
     assert.equal(await db.claimSummary(T, 'daily', D2), true);
     assert.equal(await db.claimSummary(T, 'daily', D2), false);

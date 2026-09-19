@@ -233,6 +233,18 @@ create table if not exists sent_summaries (
 
 -- Why somebody checked out or back in by hand ("Left my keys at home").
 alter table events add column if not exists note text;
+-- Where each punch came from and when it arrived (see ensureTraceColumns in
+-- src/db.js, which adds the same at runtime): the phone's id for it, the trace
+-- of the request that delivered it, when it reached the server, how far the
+-- phone's clock was out, and how old its position fix was.
+alter table events add column if not exists client_id text;
+alter table events add column if not exists trace_id text;
+alter table events add column if not exists received_at timestamptz;
+alter table events alter column received_at set default now();
+alter table events add column if not exists clock_skew_ms bigint;
+alter table events add column if not exists fix_age_ms bigint;
+create unique index if not exists events_client_punch
+    on events (tenant_id, employee_ref, client_id) where client_id is not null;
 
 -- When the workspace is working, on its own clock (the app's manager box hides outside it).
 alter table tenant_settings add column if not exists work_start time;

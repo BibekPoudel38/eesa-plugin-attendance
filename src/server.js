@@ -386,19 +386,36 @@ async function announcePunch(tenantId, employeeRef, type, status, extra = {}) {
 function punchOutcome(ev) {
   return {
     recorded: Boolean(ev && ev.id),
-    reason: (ev && ev.ignored) || (ev && ev.duplicate ? 'already_in_that_state' : null),
+    reason: (ev && ev.ignored) || (ev && ev.replayed ? 'already_recorded' : null)
+      || (ev && ev.duplicate ? 'already_in_that_state' : null),
     at: (ev && ev.at) || null,
   };
 }
 
+/// What the phone says about WHEN and WHICH punch this is, turned into what
+/// the record keeps: the time on the server's clock, the phone's id for the
+/// punch, the trace that leads back to the phone's log, and the fix's age.
+/// Null when the punch is too old to file, after the refusal has been sent.
+function punchDetails(req, res) {
+  const { clientAt = null, sentAt = null, clientId = null, fixAgeMs = null } = req.body || {};
+  const when = db.punchTime({ clientAt, sentAt });
+  if (when.error) {
+    res.status(422).json({ ok: false, error: { code: when.error,
+      message: 'This punch is more than 7 days old, so it was not filed. A manager can add the time with Fix times.' } });
+    return null;
+  }
+  return { at: when.at, skewMs: when.skewMs, clientId, fixAgeMs, traceId: req.get('X-Eesa-Trace') || null };
+}
+
 // ---- Employee REST hot path (Flutter) — any enrolled user -----------------
 app.post('/api/checkIn', emp, async (req, res) => {
-  const { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true, source = 'geofence', workType = null, clientAt = null, note = null } = req.body || {};
+  const { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true, source = 'geofence', workType = null, note = null } = req.body || {};
+  const details = punchDetails(req, res);
+  if (!details) return;
   // No arrival is held for a manager's word any more. "Is X here?" was answered
   // once in eight, and the phone crossing the zone is already the evidence.
   const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_in', {
-    zoneId, lat, lng, accuracyM, forWork, source, workType, note,
-    at: db.punchedAt(clientAt),
+    zoneId, lat, lng, accuracyM, forWork, source, workType, note, ...details,
   });
   const status = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
   // A repeated arrival records nothing, so it announces nothing. The OS fires
@@ -414,9 +431,11 @@ app.post('/api/checkIn', emp, async (req, res) => {
 });
 
 app.post('/api/checkOut', emp, async (req, res) => {
-  const { zoneId = null, lat = null, lng = null, accuracyM = null, source = 'geofence', clientAt = null, note = null } = req.body || {};
+  const { zoneId = null, lat = null, lng = null, accuracyM = null, source = 'geofence', note = null } = req.body || {};
+  const details = punchDetails(req, res);
+  if (!details) return;
   const ev = await db.recordEvent(req.ctx.tenantId, req.ctx.sub, 'check_out', {
-    zoneId, lat, lng, accuracyM, source, note, at: db.punchedAt(clientAt),
+    zoneId, lat, lng, accuracyM, source, note, ...details,
   });
   const status = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
   if (ev.ignored) noteRefusedPunch(req.ctx.tenantId, req.ctx.sub, 'check_out', ev);

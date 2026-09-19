@@ -374,25 +374,41 @@ async function lastEvent(tenantId, employeeRef) {
 const SAME_PRESENCE_MS = 12 * 60 * 60 * 1000;
 
 /// How far back a phone may say a punch happened. A punch that could not be
-/// sent when it happened — no signal, or an expired session — is queued and
-/// replayed, and it has to land on the shift it belongs to rather than at the
-/// moment the queue drained. Jeeva's Sep 8 shows the cost of getting this
-/// wrong: an arrival lost in the morning and a departure filed alone made a
-/// worked day read "0 min".
+/// sent when it happened — no signal, the server down, an expired session — is
+/// kept on the phone and sent later, and it has to land on the shift it belongs
+/// to rather than at the moment it finally got through. Jeeva's Sep 8 shows the
+/// cost of getting this wrong: an arrival lost in the morning and a departure
+/// filed alone made a worked day read "0 min".
 ///
-/// Bounded in both directions, because a handset clock is not authority to
-/// rewrite a timesheet. The future is never accepted beyond ordinary skew, and
-/// two days is far longer than the queue can plausibly hold a punch.
-const MAX_BACKDATE_MS = 48 * 60 * 60 * 1000;
+/// A week, so a weekend outage costs nothing. It was two days, and past that
+/// the punch was filed at the moment it ARRIVED: a Friday departure delivered
+/// on Monday became a shift that ran until Monday.
+const MAX_BACKDATE_MS = 7 * 24 * 60 * 60 * 1000;
+/// Differences this small are the network, not the phone's clock.
 const MAX_CLOCK_SKEW_MS = 60 * 1000;
 
-export function punchedAt(clientAt, now = Date.now()) {
-  const ms = Number(clientAt);
-  if (!Number.isFinite(ms) || ms <= 0) return null;
-  const behind = now - ms;
-  if (behind < -MAX_CLOCK_SKEW_MS) return null;   // the future
-  if (behind > MAX_BACKDATE_MS) return null;      // too old to trust
-  return new Date(Math.min(ms, now)).toISOString();
+/// When a punch happened, on the server's clock.
+///
+/// The phone says when it happened (clientAt) and, as it sends, what its own
+/// clock reads (sentAt). How far sentAt is from the server's clock is how far
+/// the phone's clock is out, and the punch is moved by exactly that: a handset
+/// set an hour wrong still files the right time, and a phone's clock is never
+/// authority to rewrite a timesheet. Builds that send no sentAt are taken at
+/// their word within the window, as before.
+///
+/// Returns { at, skewMs }, with at null for a live punch the server times
+/// itself; or { error } for a punch older than a week, which is refused and
+/// said so rather than quietly moved to today.
+export function punchTime({ clientAt, sentAt } = {}, now = Date.now()) {
+  const happened = Number(clientAt);
+  if (!Number.isFinite(happened) || happened <= 0) return { at: null, skewMs: null };
+  const sent = Number(sentAt);
+  const drift = Number.isFinite(sent) && sent > 0 ? now - sent : 0;
+  const skewMs = Math.abs(drift) > MAX_CLOCK_SKEW_MS ? Math.round(drift) : 0;
+  const at = happened + skewMs;
+  if (now - at > MAX_BACKDATE_MS) return { error: 'PUNCH_TOO_OLD', skewMs };
+  // Nothing happens after now.
+  return { at: new Date(Math.min(at, now)).toISOString(), skewMs };
 }
 
 
@@ -467,6 +483,63 @@ export async function ensureSimplifyTables() {
   });
   return _simplifyReady;
 }
+
+/// Where each punch came from and when it arrived: the phone's own id for it,
+/// so a punch sent twice is recorded once; the trace of the request that
+/// delivered it, which leads from the row back to that phone's log of the
+/// crossing; when the server received it; how far the phone's clock was out;
+/// and how old the phone's position fix was. Never throws: a database that
+/// refuses the change still records punches, only without these.
+let _traceReady = null;
+async function ensureTraceColumns() {
+  if (_traceReady) return _traceReady;
+  _traceReady = (async () => {
+    try {
+      await pool.query(`alter table events
+          add column if not exists client_id text,
+          add column if not exists trace_id text,
+          add column if not exists received_at timestamptz,
+          add column if not exists clock_skew_ms bigint,
+          add column if not exists fix_age_ms bigint`);
+      // New rows only. Existing rows keep NULL: when they arrived is unknown,
+      // and stamping them with today would say otherwise.
+      await pool.query(`alter table events alter column received_at set default now()`);
+      await pool.query(`create unique index if not exists events_client_punch
+          on events (tenant_id, employee_ref, client_id) where client_id is not null`);
+      return true;
+    } catch (e) {
+      console.error('[attendance] could not add punch trace columns:', e && e.message);
+      return false;
+    }
+  })();
+  return _traceReady;
+}
+
+/// A punch already on the record: by the phone's id for it, or — for builds
+/// that send none — the same type at the same second.
+async function samePunch(tenantId, employeeRef, type, { clientId = null, at = null } = {}) {
+  if (clientId) {
+    const rows = await q(
+      `select id, at from events where tenant_id = $1 and employee_ref = $2 and client_id = $3 limit 1`,
+      [tenantId, employeeRef, clientId],
+    );
+    if (rows[0]) return rows[0];
+  }
+  if (!at) return null;
+  const rows = await q(
+    `select id, at from events
+      where tenant_id = $1 and employee_ref = $2 and type = $3
+        and at between $4::timestamptz - interval '2 seconds' and $4::timestamptz + interval '2 seconds'
+      limit 1`,
+    [tenantId, employeeRef, type, at],
+  );
+  return rows[0] || null;
+}
+
+const wholeMs = (v) => {
+  const n = Number(v);
+  return v == null || v === '' || !Number.isFinite(n) ? null : Math.round(n);
+};
 
 function notePresenceSignal(tenantId, employeeRef, { type, zoneId, lat, lng, accuracyM, source, reason, at }) {
   ensureSimplifyTables()
@@ -586,7 +659,8 @@ export async function recordEvent(
   tenantId, employeeRef, type,
   { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true,
     source = 'geofence', workType = null, requireConfirm = false,
-    at = null, note = null } = {},
+    at = null, note = null, clientId = null, traceId = null, skewMs = null,
+    fixAgeMs = null } = {},
 ) {
   await ensureSimplifyTables();
   const why = note == null ? null : String(note).trim().slice(0, 200) || null;
@@ -604,6 +678,13 @@ export async function recordEvent(
   // finally got through. Judging a replayed 9am arrival against 2pm would call
   // it a stale shift and open a second one.
   const happenedAt = at ? Date.parse(at) : Date.now();
+  // The same punch arriving twice is one punch: a phone that sent it, never
+  // heard back, and sent it again from its queue. Judged before anything else,
+  // so a repeat can neither add a row nor leave a presence signal behind.
+  const traced = await ensureTraceColumns();
+  const cid = clientId == null || clientId === '' ? null : String(clientId).slice(0, 128);
+  const again = await samePunch(tenantId, employeeRef, type, { clientId: traced ? cid : null, at });
+  if (again) return { id: null, type, at: iso(again.at), duplicate: true, replayed: true };
   // Same trap: a missing accuracy must stay null, not become 0 — "0 m" would
   // claim a perfect fix and remove all the slack the verification allows.
   const rawAcc = num(accuracyM);
@@ -655,21 +736,33 @@ export async function recordEvent(
   // decision without adding any information.
   const pending = type === 'check_in' && requireConfirm ? 'pending' : null;
   const hasConfirm = await ensureSettingsColumn();
-  const rows = hasConfirm
-    ? await q(
-        `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, accuracy_m, for_work, source, work_type, confirm_status, at, note)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, coalesce($12::timestamptz, now()), $13) returning id, type, at`,
-        [tenantId, employeeRef, type, zid, la, ln, acc, forWork !== false,
-         String(source || 'geofence'), workType ? String(workType).slice(0, 120) : null, pending,
-         at, why],
-      )
-    : await q(
-        `insert into events (tenant_id, employee_ref, type, zone_id, lat, lng, accuracy_m, for_work, source, work_type, at, note)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, coalesce($11::timestamptz, now()), $12) returning id, type, at`,
-        [tenantId, employeeRef, type, zid, la, ln, acc, forWork !== false,
-         String(source || 'geofence'), workType ? String(workType).slice(0, 120) : null,
-         at, why],
-      );
+  const row = {
+    tenant_id: tenantId, employee_ref: employeeRef, type, zone_id: zid, lat: la, lng: ln,
+    accuracy_m: acc, for_work: forWork !== false, source: String(source || 'geofence'),
+    work_type: workType ? String(workType).slice(0, 120) : null, at, note: why,
+  };
+  if (hasConfirm) row.confirm_status = pending;
+  if (traced) {
+    Object.assign(row, {
+      client_id: cid,
+      trace_id: traceId ? String(traceId).slice(0, 64) : null,
+      clock_skew_ms: wholeMs(skewMs),
+      fix_age_ms: wholeMs(fixAgeMs),
+    });
+  }
+  const cols = Object.keys(row);
+  const rows = await q(
+    `insert into events (${cols.join(', ')})
+     values (${cols.map((c, i) => (c === 'at' ? `coalesce($${i + 1}::timestamptz, now())` : `$${i + 1}`)).join(', ')})
+     ${traced && cid ? 'on conflict (tenant_id, employee_ref, client_id) where client_id is not null do nothing' : ''}
+     returning id, type, at`,
+    Object.values(row),
+  );
+  if (!rows.length) {
+    // The same punch, delivered twice at the same moment, lost the race.
+    const won = await samePunch(tenantId, employeeRef, type, { clientId: cid, at });
+    return { id: null, type, at: iso(won && won.at), duplicate: true, replayed: true };
+  }
   await upsertDaySummary(tenantId, employeeRef, await shiftDayOfEvent(tenantId, employeeRef, rows[0].id, rows[0].at));
   // Gated on hasConfirm, not just on the request. If the DDL never landed (no
   // grant on this database) the punch was inserted WITHOUT confirm_status, so
@@ -1262,6 +1355,7 @@ export async function eventLog(
   const rows = await q(
     `select e.id, e.employee_ref, e.type, e.at, e.source, e.work_type, e.for_work,
             e.lat, e.lng, e.accuracy_m, e.zone_id, e.note,
+            to_jsonb(e)->>'received_at' as received_at, to_jsonb(e)->>'clock_skew_ms' as clock_skew_ms,
             z.name as zone_name, z.center_lat, z.center_lng, z.radius_m,
             coalesce(m.name, '') as name,
             (e.at at time zone $2)::date as day
@@ -1293,6 +1387,10 @@ const eventOut = (r) => {
     note: r.note || null,
     // Where it happened, by name, even when no position came with it.
     zoneName: r.zone_name || null,
+    // When the server got it, when that differs from when it happened: a punch
+    // kept on the phone while the server could not be reached.
+    receivedAt: r.received_at ? iso(r.received_at) : null,
+    clockSkewMs: r.clock_skew_ms != null ? Number(r.clock_skew_ms) : null,
     location,
     verification: v.state,          // 'verified' | 'outside' | 'unverified'
     verificationReason: v.reason,
@@ -1326,6 +1424,7 @@ export async function myEvents(tenantId, employeeRef, { from = null, to = null, 
   const rows = await q(
     `select e.id, e.employee_ref, e.type, e.at, e.source, e.work_type, e.for_work,
             e.lat, e.lng, e.accuracy_m, e.zone_id, e.note,
+            to_jsonb(e)->>'received_at' as received_at, to_jsonb(e)->>'clock_skew_ms' as clock_skew_ms,
             z.name as zone_name, z.center_lat, z.center_lng, z.radius_m,
             '' as name, (e.at at time zone $2)::date as day
        from events e
