@@ -446,10 +446,13 @@
     .sum > button { position:relative; display:block; margin:0; padding:10px 12px 12px; border:0; background:none; font:inherit; color:inherit; text-align:left; cursor:pointer; -webkit-tap-highlight-color:transparent; }
     .sum > button > span { display:block; }
     .sum > button + button::before { content:''; position:absolute; left:0; top:12px; bottom:12px; width:.5px; background:var(--ios-sep); }
-    .sum > button.active { background:var(--ios-fill); }
+    /* The chosen tile is filled, not washed grey: on a row of three, colour is
+       what tells you at a glance which one the list below belongs to. */
+    .sum > button.active { background:var(--primary); color:var(--primary-ink); }
     .sum > button.active::before, .sum > button.active + button::before { display:none; }
-    .sum > button.active .sum__l { color:var(--primary); font-weight:600; }
+    .sum > button.active .sum__l { color:inherit; font-weight:600; }
     .sum > button:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
+    .sum > button.active:focus-visible { outline-color:var(--primary-ink); }
     .sum__l { font-size:13px; letter-spacing:-.08px; color:var(--ios-2); }
     .sum__n { margin-top:2px; font-family:ui-rounded, -apple-system, system-ui, sans-serif; font-size:22px; font-weight:700; letter-spacing:.35px; font-variant-numeric:tabular-nums; white-space:nowrap; }
     .seg { display:grid; grid-auto-flow:column; grid-auto-columns:1fr; padding:2px; margin:0 0 22px; border-radius:9px; background:var(--ios-fill); }
