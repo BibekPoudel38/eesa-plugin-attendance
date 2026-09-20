@@ -459,6 +459,17 @@
     }
     .seg button.active { background:var(--ios-seg); font-weight:600; box-shadow:0 3px 8px rgba(0,0,0,.12), 0 3px 1px rgba(0,0,0,.04); }
     .seg button:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
+    /* Search, as iOS draws it: a filled pill with the magnifier inside. */
+    .search { position:relative; display:block; margin:0 0 22px; }
+    .search .ic { position:absolute; left:11px; top:50%; width:17px; height:17px; transform:translateY(-50%); color:var(--ios-2); pointer-events:none; }
+    .search input {
+      width:100%; box-sizing:border-box; font:inherit; font-size:17px; letter-spacing:-.4px;
+      color:var(--ios-label); background:var(--ios-fill); border:0; border-radius:10px;
+      padding:9px 12px 9px 36px; -webkit-appearance:none; appearance:none;
+    }
+    .search input::placeholder { color:var(--ios-2); }
+    .search input::-webkit-search-cancel-button { -webkit-appearance:none; }
+    .search input:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
     .ihead { display:flex; justify-content:space-between; gap:8px; padding:0 16px 7px; font-size:13px; letter-spacing:-.08px; color:var(--ios-2); }
     .ihead span:first-child { text-transform:uppercase; }
     body.ios .cell input {
@@ -687,6 +698,7 @@
       chart: '<path d="M3 21h18"/><path d="M6.5 21v-6M12 21V6M17.5 21v-4"/>',
       sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
       activity: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
+      search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
       checkCircle: '<circle cx="12" cy="12" r="9"/><path d="M8.4 12.4l2.6 2.6 4.6-5.2"/>',
       history: '<path d="M3.2 12a8.8 8.8 0 1 0 2.8-6.4L3 8"/><path d="M3 3.5V8h4.5"/><path d="M12 8v4.2l3 1.8"/>',
       inbox: '<path d="M4 13l2.5-8h11L20 13"/><path d="M4 13h5l1 2h4l1-2h5v6H4z"/>',
@@ -1154,9 +1166,9 @@
     // finished, who never came in. Out for work and on site but not working are
     // both "at work" — they are on the clock, and their row says which.
     const TODAY_GROUPS = [
-      ['in', 'At work', 'Nobody is at work right now.'],
-      ['done', 'Finished', 'Nobody has finished a shift today.'],
-      ['absent', 'Not in', 'Everybody came in today.'],
+      ['in', 'At work', 'No one at work'],
+      ['done', 'Finished', 'No one has finished a shift'],
+      ['absent', 'Not in', 'Everyone came in today'],
     ];
     const todayGroup = (key, people) => people.filter((p) => {
       const s = stateOf(p);
@@ -1234,9 +1246,7 @@
             `<button type="button" role="tab" data-g="${k}"><span class="sum__l">${label}</span><span class="sum__n">${of(k).length}</span></button>`).join('')}
         </div>
 
-        <div class="ihead"><span id="tglabel"></span><span id="tgcount"></span></div>
         <div class="ig" id="tlist"></div>
-        <div class="ig"><button class="cell cell--action" type="button" id="toteam">See everyone</button></div>
 
         ${fixes || blind ? `<div class="ihead"><span>Needs attention</span></div>
         <div class="ig">
@@ -1250,21 +1260,20 @@
 
         <div class="ihead"><span>This week</span><span>${rangeName(weekRange(0)[0], todayTZ())}</span></div>
         <div class="ig">
-          <div class="cell"><span class="cell__label">Team hours</span><span class="cell__detail cell__value">${span(teamMinutes)}</span></div>
-          <button class="cell cell--action" type="button" id="toweek">Open the week</button>
+          <button class="cell" type="button" id="toweek">
+            <span class="cell__main">Team hours</span>
+            <span class="cell__detail cell__value">${span(teamMinutes)}</span>${CHEV}</button>
         </div>`;
 
       // The tile showing is the list below it.
       const paint = () => {
-        const [, label, empty] = TODAY_GROUPS.find(([k]) => k === TODAY.group) || TODAY_GROUPS[0];
+        const [, , empty] = TODAY_GROUPS.find(([k]) => k === TODAY.group) || TODAY_GROUPS[0];
         const list = of(TODAY.group);
         $('view').querySelectorAll('[data-g]').forEach((b) => {
           const on = b.dataset.g === TODAY.group;
           b.classList.toggle('active', on);
           b.setAttribute('aria-selected', String(on));
         });
-        $('tglabel').textContent = label;
-        $('tgcount').textContent = list.length || '';
         $('tlist').innerHTML = list.length ? list.map(personRow).join('') : cellNote(empty);
         bindPeople($('tlist'));
       };
@@ -1274,7 +1283,6 @@
       const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
       on('tofix', () => { TEAM.mode = 'week'; TEAM.person = null; go('team'); });
       on('toset', () => go('setup'));
-      on('toteam', () => { TEAM.mode = 'people'; TEAM.person = null; go('team'); });
       on('toweek', () => { TEAM.mode = 'week'; TEAM.person = null; go('team'); });
       paint();
     };
@@ -1312,7 +1320,7 @@
         bindPeople($('tlist'));
       };
       body.innerHTML = `
-        <div class="ig"><label class="cell"><input id="tq" type="search" placeholder="Search name" autocomplete="off" value="${esc(TEAM.q)}"></label></div>
+        <label class="search">${ic('search')}<input id="tq" type="search" placeholder="Search" autocomplete="off" value="${esc(TEAM.q)}"></label>
         <div class="ihead"><span>Everyone</span><span>${people.length}</span></div>
         <div class="ig" id="tlist"></div>`;
       $('tq').oninput = () => { TEAM.q = $('tq').value; draw(); };
@@ -1599,7 +1607,7 @@
         <div class="ihead"><span>People</span><span id="tcount"></span></div>
         ${rows.length ? `
         <div class="ig">
-          <label class="cell"><input id="tq" type="search" placeholder="Search name or email" autocomplete="off"></label>
+          <label class="search">${ic('search')}<input id="tq" type="search" placeholder="Search" autocomplete="off"></label>
           ${catalog.length ? `<label class="cell"><span class="cell__main">Job type</span><select id="tjob" class="when">
             <option value="">All</option>
             ${catalog.map((w) => `<option value="${esc(w.id)}">${esc(w.name)}</option>`).join('')}
