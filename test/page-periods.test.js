@@ -74,3 +74,40 @@ test('an empty day says which day it was', () => {
   assert.equal(page.emptyNote({ period: 'yesterday' }), 'Nothing recorded yesterday.');
   assert.equal(page.emptyNote({ period: 'custom' }), 'No hours on these dates.');
 });
+
+// The Today screen: three tiles, and the tile showing is the list below it.
+// Everyone enrolled belongs to exactly one of them, or somebody is invisible
+// on the one screen a manager checks in the morning.
+const today = vm.createContext({});
+vm.runInContext([
+  grab(/const isReason = [^\n]*/),
+  grab(/const stateOf = [\s\S]*?'absent'\);/),
+  grab(/const TODAY_GROUPS = \[[\s\S]*?\n    \];/),
+  grab(/const todayGroup = [\s\S]*?\n    \}\);/),
+  'Object.assign(this, { TODAY_GROUPS, todayGroup, stateOf });',
+].join('\n'), today);
+
+const PEOPLE = [
+  { name: 'working', checkedIn: true, at: '2026-09-19T16:20:00Z' },
+  { name: 'out on an errand', checkedIn: false, reason: 'Outside work', at: '2026-09-19T18:00:00Z' },
+  { name: 'here but not working', checkedIn: false, reason: 'Not for work', at: '2026-09-19T15:00:00Z' },
+  { name: 'finished', checkedIn: false, at: '2026-09-19T23:00:00Z' },
+  { name: 'never came in', checkedIn: false, at: null },
+];
+
+test('at work covers everyone on the clock, however they are marked', () => {
+  const names = today.todayGroup('in', PEOPLE).map((p) => p.name);
+  assert.deepEqual([...names], ['working', 'out on an errand', 'here but not working']);
+});
+
+test('finished and not in are their own', () => {
+  assert.deepEqual([...today.todayGroup('done', PEOPLE).map((p) => p.name)], ['finished']);
+  assert.deepEqual([...today.todayGroup('absent', PEOPLE).map((p) => p.name)], ['never came in']);
+});
+
+test('everybody is in exactly one group', () => {
+  const counted = today.TODAY_GROUPS
+    .map(([key]) => today.todayGroup(key, PEOPLE).length)
+    .reduce((a, b) => a + b, 0);
+  assert.equal(counted, PEOPLE.length);
+});
