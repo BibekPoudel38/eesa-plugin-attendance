@@ -834,6 +834,10 @@
         </button>
         <div class="punches" id="${id}${esc(r.date)}" hidden></div>`;
     };
+    // A day's punches, newest first, whatever order the server sent: on a day
+    // with several shifts the one being looked for is the last thing that
+    // happened, and it was arriving at the bottom of the list.
+    const latestFirst = (evs) => evs.slice().sort((a, b) => new Date(b.at) - new Date(a.at));
     const punchCell = (e, editable) => {
       const inner = `<span class="cell__main">
           <span class="cell__title">${e.type === 'check_in' ? 'Checked in' : 'Checked out'}</span>
@@ -1074,7 +1078,7 @@
         MINE.openDay = day;
         box.innerHTML = cellNote('Loading…');
         try {
-          const evs = (await api('/api/getMyEvents?' + new URLSearchParams({ from: day, to: day }))).slice().reverse();
+          const evs = latestFirst(await api('/api/getMyEvents?' + new URLSearchParams({ from: day, to: day })));
           const editable = day >= yesterday;
           box.innerHTML = evs.length ? evs.map((e) => punchCell(e, editable)).join('') : cellNote('Nothing recorded on this day.');
           box.querySelectorAll('[data-punch]').forEach((b) => {
@@ -1385,7 +1389,7 @@
         box.innerHTML = cellNote('Loading…');
         try {
           const evs = await api('/api/admin/events?' + new URLSearchParams({ employeeRef: ref, from: day, to: day }));
-          const rows = evs.slice().reverse().map((e) => punchCell(e, false)).join('');
+          const rows = latestFirst(evs).map((e) => punchCell(e, false)).join('');
           box.innerHTML = (rows || cellNote('Nothing recorded on this day.'))
             + `<button class="cell cell--action" type="button" data-fix="${esc(day)}">Fix times</button>`;
           box.querySelector('[data-fix]').onclick = () => {
