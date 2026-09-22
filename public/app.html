@@ -885,7 +885,17 @@
     // A single-day tile opens that day; say so when it has nothing.
     const emptyNote = (S) => (S.period === 'today' ? 'Nothing recorded today.'
       : S.period === 'yesterday' ? 'Nothing recorded yesterday.' : 'No hours on these dates.');
-    const openOnList = (S, from, to) => (from === to && PERIODS[S.period] ? from : S.openDay);
+    // Which day's punches are showing. A single-day tile opens its own day, and
+    // a day someone opened by hand stays open past a refresh. Failing both,
+    // today — the day you open attendance to check is the day you are in, and
+    // the list was making everyone tap the row they had come for. Only when the
+    // dates cover today: an older range has no today to open.
+    const openOnList = (S, from, to) => {
+      if (from === to && PERIODS[S.period]) return from;
+      if (S.openDay) return S.openDay;
+      const t = todayTZ();
+      return from <= t && t <= to ? t : null;
+    };
     /** The tiles and the dates of one page; `p` is its id prefix. */
     function wireRange(p, S, list) {
       if (!S.from) { const t = todayTZ(); [S.from, S.to] = [monthBack(t), t]; }

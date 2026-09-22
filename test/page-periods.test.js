@@ -35,7 +35,7 @@ vm.runInContext([
   grab(/const rangeOf = [^\n]*/),
   grab(/const monthBack = \(d\) => \{[\s\S]*?\n    \};/),
   grab(/const emptyNote = [\s\S]*?\);\n/),
-  grab(/const openOnList = [^\n]*/),
+  grab(/const openOnList = \(S, from, to\) => \{[\s\S]*?\n    \};/),
   'Object.assign(this, { rangeOf, monthBack, emptyNote, openOnList });',
 ].join('\n'), page);
 
@@ -64,8 +64,20 @@ test('a month back from a longer month lands on the shorter one’s last day', (
 test('Today and Yesterday open on that day’s check-ins and check-outs', () => {
   assert.equal(page.openOnList({ period: 'today', openDay: null }, '2026-09-19', '2026-09-19'), '2026-09-19');
   assert.equal(page.openOnList({ period: 'yesterday', openDay: null }, '2026-09-18', '2026-09-18'), '2026-09-18');
-  // A week or a range opens only the day somebody opened.
-  assert.equal(page.openOnList({ period: 'week', openDay: null }, '2026-09-14', '2026-09-19'), null);
+});
+
+test('a list that reaches today opens today, untouched', () => {
+  // The default view is a month back to today, and today is the row anyone
+  // opening this screen came to read.
+  assert.equal(page.openOnList({ period: 'custom', openDay: null }, '2026-08-19', '2026-09-19'), '2026-09-19');
+  assert.equal(page.openOnList({ period: 'week', openDay: null }, '2026-09-14', '2026-09-19'), '2026-09-19');
+});
+
+test('dates that end before today open nothing', () => {
+  assert.equal(page.openOnList({ period: 'custom', openDay: null }, '2026-08-01', '2026-08-31'), null);
+});
+
+test('the day somebody opened stays open', () => {
   assert.equal(page.openOnList({ period: 'custom', openDay: '2026-09-02' }, '2026-08-19', '2026-09-19'), '2026-09-02');
 });
 
