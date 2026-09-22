@@ -515,6 +515,129 @@ async function ensureTraceColumns() {
   return _traceReady;
 }
 
+/// Where the phone's location reports live, and a manager's "time away" on a
+/// fixed day. Never throws: a database that refuses the change still records
+/// punches and fixes; it only has no location reports to show.
+let _locationReady = null;
+async function ensureLocationSchema() {
+  if (_locationReady) return _locationReady;
+  _locationReady = (async () => {
+    try {
+      await ensureSimplifyTables();
+      await pool.query(`create table if not exists location_states (
+        id uuid primary key default gen_random_uuid(),
+        tenant_id text not null,
+        employee_ref text not null,
+        state text not null check (state in ('off', 'on')),
+        reason text not null default '',
+        at timestamptz not null,
+        last_on_at timestamptz,
+        source text not null default 'app',
+        client_id text,
+        received_at timestamptz not null default now()
+      )`);
+      await pool.query(`create index if not exists location_states_person_at
+        on location_states (tenant_id, employee_ref, at)`);
+      await pool.query(`create unique index if not exists location_states_client
+        on location_states (tenant_id, employee_ref, client_id) where client_id is not null`);
+      await pool.query(`alter table day_corrections
+        add column if not exists away_minutes integer not null default 0`);
+      return true;
+    } catch (e) {
+      console.error('[attendance] could not add location reports:', e && e.message);
+      return false;
+    }
+  })();
+  return _locationReady;
+}
+
+/// File one report from the phone. The same report sent twice — an answer
+/// lost on the way back — is filed once, by the phone's id for it.
+export async function recordLocationState(tenantId, employeeRef, {
+  state, reason = '', source = 'app', at = null, lastOnAt = null, clientId = null,
+} = {}) {
+  if (!(await ensureLocationSchema())) return { recorded: false, reason: 'unavailable' };
+  const rows = await q(
+    `insert into location_states (tenant_id, employee_ref, state, reason, at, last_on_at, source, client_id)
+     values ($1, $2, $3, $4, coalesce($5::timestamptz, now()), $6, $7, $8)
+     on conflict (tenant_id, employee_ref, client_id) where client_id is not null do nothing
+     returning id`,
+    [tenantId, String(employeeRef), state,
+     LOCATION_REASONS.has(reason) ? reason : '',
+     at, lastOnAt,
+     LOCATION_SOURCES.has(source) ? source : 'app',
+     clientId == null || clientId === '' ? null : String(clientId).slice(0, 128)],
+  );
+  return { recorded: rows.length > 0 };
+}
+
+/// When location was off during time on the clock, for every (person, shift
+/// day) in a window, in two queries. Key: `${employeeRef}|${YYYY-MM-DD}`.
+async function locationOffIndex(tenantId, { from = null, to = null, employeeRef = null, now = Date.now() } = {}) {
+  const out = new Map();
+  if (!(await ensureLocationSchema())) return out;
+  const tz = await tenantTz(tenantId);
+  const f = from || '1970-01-01';
+  const t = to || '2999-12-31';
+  const ref = employeeRef == null ? null : String(employeeRef);
+  // What the phones said inside the window, and the last thing each said
+  // before it: an "off" from yesterday is still off until it says otherwise.
+  const states = await q(
+    `with bounds as (
+       select ((($3::date - 1)::timestamp) at time zone $2) as a,
+              ((($4::date + 2)::timestamp) at time zone $2) as b
+     ), before as (
+       select distinct on (s.employee_ref) s.employee_ref, s.state, s.reason, s.at, s.last_on_at
+         from location_states s, bounds
+        where s.tenant_id = $1 and s.at < bounds.a and ($5::text is null or s.employee_ref = $5)
+        order by s.employee_ref, s.at desc
+     )
+     select * from before
+     union all
+     select s.employee_ref, s.state, s.reason, s.at, s.last_on_at
+       from location_states s, bounds
+      where s.tenant_id = $1 and s.at >= bounds.a and s.at < bounds.b
+        and ($5::text is null or s.employee_ref = $5)
+     order by employee_ref, at`,
+    [tenantId, tz, f, t, ref],
+  );
+  if (!states.length) return out;
+  const byRef = new Map();
+  for (const s of states) {
+    const k = String(s.employee_ref);
+    if (!byRef.has(k)) byRef.set(k, []);
+    byRef.get(k).push(s);
+  }
+  // Their punches over the same stretch, cut into shift days as the totals are.
+  const events = await q(
+    `select employee_ref, type, at, for_work, note from events
+      where tenant_id = $1 and employee_ref = any($5::text[])
+        and at >= ((($3::date - 1)::timestamp) at time zone $2)
+        and at <  ((($4::date + 2)::timestamp) at time zone $2)
+      order by employee_ref, at`,
+    [tenantId, tz, f, t, [...byRef.keys()]],
+  );
+  const punches = new Map();
+  for (const e of events) {
+    const k = String(e.employee_ref);
+    if (!punches.has(k)) punches.set(k, []);
+    punches.get(k).push(e);
+  }
+  for (const [k, list] of punches) {
+    const days = new Map();
+    for (const e of assignShiftDays(list, tz)) {
+      if (e.shiftDay < f || e.shiftDay > t) continue;
+      if (!days.has(e.shiftDay)) days.set(e.shiftDay, []);
+      days.get(e.shiftDay).push(e);
+    }
+    for (const [day, dayEvents] of days) {
+      const windows = locationOffWindows(byRef.get(k), computeToday(dayEvents, { now }).intervals, { now });
+      if (windows.length) out.set(`${k}|${day}`, windows);
+    }
+  }
+  return out;
+}
+
 /// A punch already on the record: by the phone's id for it, or — for builds
 /// that send none — the same type at the same second.
 async function samePunch(tenantId, employeeRef, type, { clientId = null, at = null } = {}) {
@@ -553,8 +676,9 @@ function notePresenceSignal(tenantId, employeeRef, { type, zoneId, lat, lng, acc
 
 async function dayCorrection(tenantId, employeeRef, day) {
   await ensureSimplifyTables();
+  const away = (await ensureLocationSchema()) ? ', away_minutes' : '';
   const rows = await q(
-    `select first_in, last_out, note, corrected_by, corrected_at from day_corrections
+    `select first_in, last_out, note, corrected_by, corrected_at${away} from day_corrections
       where tenant_id = $1 and employee_ref = $2 and day = $3::date`,
     [tenantId, employeeRef, day],
   );
@@ -567,11 +691,14 @@ const MAX_CORRECTED_MS = 16 * 60 * 60 * 1000;
 
 /// Check a manager's in and out for a day before it is saved. Returns a reason
 /// in plain words, or null when it is fine.
-export function correctionProblem({ day, firstIn, lastOut, tz }) {
+export function correctionProblem({ day, firstIn, lastOut, tz, awayMinutes = 0 }) {
   const a = Date.parse(firstIn);
   const b = Date.parse(lastOut);
   if (!Number.isFinite(a) || !Number.isFinite(b)) return 'Both times are needed.';
   if (b <= a) return 'The check-out has to be after the check-in.';
+  const away = Number(awayMinutes || 0);
+  if (!Number.isInteger(away) || away < 0) return 'Time away has to be whole minutes.';
+  if (away * 60000 >= b - a) return 'Time away has to be shorter than the day.';
   if (b - a > MAX_CORRECTED_MS) return 'A day can be at most 16 hours.';
   if (localDay(firstIn, tz) !== day) return 'The check-in has to be on the day you are fixing.';
   if (a > Date.now() + 60 * 1000) return 'That time has not happened yet.';
@@ -580,11 +707,14 @@ export function correctionProblem({ day, firstIn, lastOut, tz }) {
 
 /// A manager sets a day's real in and out. The punches stay as they were;
 /// the correction is what the day now adds up to, and who decided it.
-export async function setDayCorrection(tenantId, employeeRef, day, { firstIn, lastOut, note = '' }, by) {
+export async function setDayCorrection(tenantId, employeeRef, day, { firstIn, lastOut, note = '', awayMinutes = 0 }, by) {
   await ensureSimplifyTables();
   const tz = await tenantTz(tenantId);
-  const problem = correctionProblem({ day, firstIn, lastOut, tz });
+  const problem = correctionProblem({ day, firstIn, lastOut, tz, awayMinutes });
   if (problem) return { ok: false, problem };
+  const away = Number(awayMinutes || 0);
+  const canAway = await ensureLocationSchema();
+  if (away && !canAway) return { ok: false, problem: 'Time away cannot be saved right now. Try again in a minute.' };
   await q(
     `insert into day_corrections (tenant_id, employee_ref, day, first_in, last_out, note, corrected_by, corrected_at)
      values ($1, $2, $3::date, $4, $5, $6, $7, now())
@@ -594,6 +724,12 @@ export async function setDayCorrection(tenantId, employeeRef, day, { firstIn, la
     [tenantId, employeeRef, day, new Date(firstIn).toISOString(), new Date(lastOut).toISOString(),
      String(note || '').slice(0, 300), String(by)],
   );
+  if (canAway) {
+    await q(
+      `update day_corrections set away_minutes = $4 where tenant_id = $1 and employee_ref = $2 and day = $3::date`,
+      [tenantId, employeeRef, day, away],
+    );
+  }
   await upsertDaySummary(tenantId, employeeRef, day);
   return { ok: true };
 }
@@ -896,13 +1032,17 @@ export function computeToday(
   let lastZone = null;
   let ms = 0;
   let shortVisits = 0;
+  // The stretches that were counted, for questions about the time that is paid.
+  const intervals = [];
   // Left for outside work: the stretch stays open until they are back.
   let awayForWork = null;
   // A finished stretch of presence counts only if it lasted long enough to be work.
   const closeAt = (at) => {
     const span = at - openIn;
-    if (span >= minVisitMs) ms += span;
-    else if (span > 0) shortVisits += 1;
+    if (span >= minVisitMs) {
+      ms += span;
+      intervals.push({ from: openIn, to: new Date(at) });
+    } else if (span > 0) shortVisits += 1;
     openIn = null;
     openEvent = null;
   };
@@ -953,7 +1093,10 @@ export function computeToday(
   if (checkedIn) {
     const running = now - openIn.getTime();
     openTooLong = running > maxOpenMs;
-    if (!openTooLong) ms += Math.max(0, running);
+    if (!openTooLong) {
+      ms += Math.max(0, running);
+      intervals.push({ from: openIn, to: new Date(Math.max(now, openIn.getTime())) });
+    }
   }
   return {
     checkedIn,
@@ -968,7 +1111,75 @@ export function computeToday(
     unclosed: checkedIn,
     shortVisits,
     totalMinutes: Math.max(0, Math.round(ms / 60000)),
+    intervals,
   };
+}
+
+// ---- Location off while on the clock ---------------------------------------
+
+/// The phone saying whether it can still see somebody leave.
+///
+/// Attendance knows someone left only because their phone crossed the edge of
+/// the zone. A phone that cannot see that — Location off, Eesa's location set
+/// to Never, While Using or approximate, or attendance switched off in the app
+/// — crosses nothing. Somebody could turn it off at work, go out, come back and
+/// turn it on, and the day read as one unbroken shift. The phone cannot stop
+/// that, but it can say so: it reports when it stops being able to see a
+/// departure and when it can again, and the time between is shown to a manager
+/// as not verified. The hours are never cut for it — phones die, and low-power
+/// mode happens to honest people too. A manager decides, with Fix times.
+///
+/// The phone notices only when Eesa runs — opened, or woken by a crossing — so
+/// `at` is when it NOTICED, and `lastOnAt` the last time it saw location
+/// working. The real moment lies between the two.
+export const LOCATION_REASONS = new Set(['services_off', 'denied', 'while_in_use', 'approximate', 'attendance_off']);
+const LOCATION_SOURCES = new Set(['app', 'geofence']);
+/// Shorter than this is a switch flicked off and on, not a trip anywhere.
+export const MIN_LOCATION_OFF_MS = 5 * 60 * 1000;
+
+/// When location was off during time on the clock.
+///
+/// `states` are the phone's reports, oldest first; `intervals` the stretches
+/// computeToday counted as work. An "off" lasts until the next "on", or until
+/// `now` when none has come — a phone that never said it was back is not
+/// evidence that it was.
+export function locationOffWindows(states, intervals, { now = Date.now(), minMs = MIN_LOCATION_OFF_MS } = {}) {
+  const periods = [];
+  let open = null;
+  for (const st of states) {
+    const at = new Date(st.at).getTime();
+    if (st.state === 'off') {
+      // Still off: the first report is when it was first noticed.
+      open ??= { from: at, reason: st.reason || '', lastOnAt: st.last_on_at ?? st.lastOnAt ?? null };
+    } else if (open) {
+      periods.push({ ...open, to: at });
+      open = null;
+    }
+  }
+  if (open) periods.push({ ...open, to: now, open: true });
+  const out = [];
+  for (const pd of periods) {
+    for (const i of intervals) {
+      const start = new Date(i.from).getTime();
+      const from = Math.max(pd.from, start);
+      const to = Math.min(pd.to, new Date(i.to).getTime());
+      if (to - from < minMs) continue;
+      // It went off some time after it was last seen on — but not before the
+      // shift began, where it no longer matters.
+      const lastOn = pd.lastOnAt == null ? null : new Date(pd.lastOnAt).getTime();
+      const earliest = from === pd.from && lastOn != null && lastOn < from - 60 * 1000
+        ? Math.max(lastOn, start) : null;
+      out.push({
+        from: iso(from),
+        to: iso(to),
+        open: Boolean(pd.open) && to === pd.to,
+        reason: pd.reason,
+        earliest: earliest == null ? null : iso(earliest),
+        minutes: Math.round((to - from) / 60000),
+      });
+    }
+  }
+  return out;
 }
 
 /// Why someone came in or went out, written on a punch the phone made. Only
@@ -1496,7 +1707,8 @@ async function upsertDaySummary(tenantId, employeeRef, day = null) {
     ? {
         firstIn: fix.first_in,
         lastOut: fix.last_out,
-        totalMinutes: Math.max(0, Math.round((new Date(fix.last_out) - new Date(fix.first_in)) / 60000)),
+        totalMinutes: Math.max(0, Math.round((new Date(fix.last_out) - new Date(fix.first_in)) / 60000)
+          - Number(fix.away_minutes || 0)),
       }
     : computed;
   await q(
@@ -2150,6 +2362,7 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
   // still be running: past the same-shift window it is a check-out that never
   // came, not a shift in progress, and it must read that way.
   await ensureSimplifyTables();
+  const awayCol = (await ensureLocationSchema()) ? ', dc.away_minutes' : '';
   params.push(await tenantTz(tenantId));
   const tzParam = params.length;
   const rows = await q(
@@ -2157,7 +2370,7 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
             ds.approval_status, ds.approved_by, ds.approved_at,
             coalesce(m.name, '') as name, m.pay_rate, sc.expected_minutes,
             late_in.at as trailing_in_at,
-            dc.corrected_by, dc.corrected_at, dc.note as correction_note,
+            dc.corrected_by, dc.corrected_at, dc.note as correction_note${awayCol},
             -- Every check-out tapped by hand during the day, paired with the
             -- last time the phone then reported leaving before they came back.
             (select json_agg(json_build_object('out', o.at, 'left', sig.at) order by o.at)
@@ -2200,9 +2413,10 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
   // The manager's flag "Nobody confirmed presence" is read off this list, and
   // the list never carried the answer — the day review said "needs a look"
   // and the card it opened showed nothing to look at.
-  const [vi, ci] = await Promise.all([
+  const [vi, ci, li] = await Promise.all([
     verificationIndex(tenantId, { from, to }),
     confirmationIndex(tenantId, { from, to }),
+    locationOffIndex(tenantId, { from, to }),
   ]);
   return rows.map((r) => {
     const day = dayStr(r.day);
@@ -2217,7 +2431,7 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
       approvalStatus: r.approval_status || 'pending',
       approvedBy: r.approved_by || null,
       approvedAt: iso(r.approved_at),
-      ...dayFlags(r),
+      ...dayFlags({ ...r, location_off: li.get(`${r.employee_ref}|${day}`) }),
       confirmStatus: ci.get(`${r.employee_ref}|${day}`) || null,
       payRate: r.pay_rate == null ? null : Number(r.pay_rate),
       // This day never got a check-out.
@@ -2249,9 +2463,11 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
 ///                    later (Jeeva, 15 Sep: 10:51 by hand, 3:25 PM by phone,
 ///                    then back in at another zone at 3:33 — so it is never
 ///                    only the day's last check-out that matters)
+///   location_off   — the phone could not see them leave for part of the time
+///                    on the clock, so those hours are its word only
 /// A manager's correction resolves all of them; "changed" just says it happened.
 const LEFT_LATER_MIN_MS = 10 * 60 * 1000;
-const NEEDS_FIX = new Set(['no_check_out', 'no_check_in', 'over_12h', 'left_later']);
+const NEEDS_FIX = new Set(['no_check_out', 'no_check_in', 'over_12h', 'left_later', 'location_off']);
 
 export function dayFlags(r, { now = Date.now(), sameShiftMs = SAME_PRESENCE_MS } = {}) {
   const trailingIn = r.trailing_in_at ? new Date(r.trailing_in_at).getTime() : null;
@@ -2261,6 +2477,7 @@ export function dayFlags(r, { now = Date.now(), sameShiftMs = SAME_PRESENCE_MS }
     .map((h) => ({ checkedOutAt: iso(h.out), leftZoneAt: iso(h.left) }))
     .filter((h) => h.checkedOutAt && h.leftZoneAt
       && new Date(h.leftZoneAt) - new Date(h.checkedOutAt) >= LEFT_LATER_MIN_MS);
+  const locationOff = Array.isArray(r.location_off) ? r.location_off : [];
   const flags = [];
   if (corrected) {
     flags.push('changed');
@@ -2269,6 +2486,7 @@ export function dayFlags(r, { now = Date.now(), sameShiftMs = SAME_PRESENCE_MS }
     if (!r.first_in && r.last_out) flags.push('no_check_in');
     if (Number(r.total_minutes || 0) > 12 * 60) flags.push('over_12h');
     if (handOuts.length) flags.push('left_later');
+    if (locationOff.length) flags.push('location_off');
   }
   return {
     open,
@@ -2281,6 +2499,9 @@ export function dayFlags(r, { now = Date.now(), sameShiftMs = SAME_PRESENCE_MS }
     // The phone's word on when they really left, for the Fix times sheet.
     handOuts: corrected ? [] : handOuts,
     leftZoneAt: !corrected && handOuts.length ? handOuts[handOuts.length - 1].leftZoneAt : null,
+    // When the phone could not see them, kept after a fix: it is what the fix was about.
+    locationOff,
+    awayMinutes: Number(r.away_minutes || 0),
   };
 }
 

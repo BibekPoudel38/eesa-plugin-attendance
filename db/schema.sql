@@ -261,3 +261,25 @@ create table if not exists work_outings (
   ended_how text
 );
 create index if not exists work_outings_open on work_outings (tenant_id, employee_ref) where ended_at is null;
+
+-- The phone saying it can no longer see somebody leave (Location off, or Eesa's
+-- location set so it cannot watch the zones), or that it can again (see
+-- ensureLocationSchema in src/db.js, which adds the same at runtime). `at` is
+-- when the phone noticed; `last_on_at` the last time it saw location working.
+create table if not exists location_states (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id text not null,
+  employee_ref text not null,
+  state text not null check (state in ('off', 'on')),
+  reason text not null default '',
+  at timestamptz not null,
+  last_on_at timestamptz,
+  source text not null default 'app',
+  client_id text,
+  received_at timestamptz not null default now()
+);
+create index if not exists location_states_person_at on location_states (tenant_id, employee_ref, at);
+create unique index if not exists location_states_client
+    on location_states (tenant_id, employee_ref, client_id) where client_id is not null;
+-- Time a manager took off the middle of a fixed day, in minutes.
+alter table day_corrections add column if not exists away_minutes integer not null default 0;

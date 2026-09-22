@@ -11,8 +11,8 @@ const TICK_MS = 60 * 1000;
 /// the next app release gives summaries a type of their own.
 const MANAGER_TYPE = 'attendance_day_review';
 
-export function startSummaries({ managerAudience }) {
-  const tick = () => runDue(new Date(), { managerAudience })
+export function startSummaries({ managerAudience, names = null }) {
+  const tick = () => runDue(new Date(), { managerAudience, names })
     .catch((e) => console.error('[attendance] summaries failed:', e && e.message));
   setTimeout(tick, 20 * 1000).unref?.();
   setInterval(tick, TICK_MS).unref?.();
@@ -23,12 +23,18 @@ export function startSummaries({ managerAudience }) {
 /// summary for good (16 Sep: the pooler refused connections at 10:32). Now a
 /// failure leaves nothing claimed and the next minute tries again; the claim
 /// still guarantees two instances never both send.
-export async function runDue(now, { managerAudience, store = db, notify = notifyUsers }) {
+export async function runDue(now, { managerAudience, names = null, store = db, notify = notifyUsers }) {
   for (const t of await store.tenantsWithSettings()) {
     for (const due of dueSummaries(now, t.timezone)) {
       const from = due.kind === 'daily' ? due.day : due.from;
       const to = due.kind === 'daily' ? due.day : due.to;
       const totals = rollUp(await store.listApprovals(t.tenantId, { from, to }));
+      // Names from the roster: the plugin's own rows are blank for anyone it
+      // never enrolled itself, and "Location off: 1h 05m" names nobody.
+      if (names && totals.locationOff.length) {
+        const byRef = await names(t.tenantId).catch(() => new Map());
+        totals.locationOff = totals.locationOff.map((p) => ({ ...p, name: byRef.get(p.employeeRef) || p.name }));
+      }
       const msg = due.kind === 'daily'
         ? dailySummary(due.day, totals)
         : weeklySummary(due.from, due.to, totals);

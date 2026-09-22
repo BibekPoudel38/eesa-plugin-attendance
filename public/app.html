@@ -307,6 +307,7 @@
     .sheet h3 { margin:0; font-size:1.08rem; }
     .sheet .sub { color:var(--muted); font-size:.84rem; margin:2px 0 14px; }
     .sheet .times { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:12px 0 14px; }
+    .sheet .times .wide { grid-column:1 / -1; }
     .sheet .evidence { background:var(--warn-weak); border-radius:10px; padding:10px 12px; font-size:.84rem; line-height:1.45; }
     .sheet .note { background:var(--card-2); border-radius:10px; padding:10px 12px; font-size:.82rem; color:var(--muted); }
     .sheet .acts { display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; margin-top:4px; }
@@ -610,8 +611,21 @@
       no_check_in: 'No check-in — a departure with no arrival before it.',
       over_12h: 'Over 12 hours — longer than any real shift.',
       left_later: 'Checked out by hand, but the phone saw them leave later.',
+      location_off: 'Location was off for part of the shift, so the phone could not see them leave. Those hours are not verified.',
       changed: 'Changed by a manager.',
     };
+    // Why the phone could not see them leave, in the words of the setting.
+    const LOCATION_WHY = {
+      services_off: 'Location Services off',
+      denied: 'Location off for Eesa',
+      while_in_use: 'Location only while Eesa is open',
+      approximate: 'Precise Location off',
+      attendance_off: 'Attendance turned off in Eesa',
+    };
+    // "2:05 PM – 3:10 PM", or "since 2:05 PM" while it is still off.
+    const offSpan = (w) => (w.open ? `since ${timeOf(w.from)}` : `${timeOf(w.from)} – ${timeOf(w.to)}`);
+    // A day whose only problem is location reads as that, not a vaguer "Needs a fix".
+    const fixLabel = (d) => ((d.flags || []).every((f) => f === 'location_off') ? 'Location off' : 'Needs a fix');
 
     const initials = (s) => (String(s || '?').trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join('') || '?').toUpperCase();
     const metres = (m) => (m == null ? '' : m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`);
@@ -847,6 +861,10 @@
         ? `<button class="cell" type="button" data-punch="${esc(e.id)}">${inner}${CHEV}</button>`
         : `<div class="cell">${inner}</div>`;
     };
+    const offCell = (w) => `<div class="cell"><span class="cell__main">
+          <span class="cell__title">Location off</span>
+          <span class="cell__sub">${esc([LOCATION_WHY[w.reason], 'not verified'].filter(Boolean).join(' · '))}</span></span>
+        <span class="cell__detail">${esc(offSpan(w))}</span></div>`;
     const CHEV = '<svg class="chev" viewBox="0 0 8 13" aria-hidden="true"><path d="M1.5 1.5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     // "9:02 AM" on the restaurant's clock, in the phone's own format.
     const hm = (iso) => iso
@@ -1399,7 +1417,10 @@
         box.innerHTML = cellNote('Loading…');
         try {
           const evs = await api('/api/admin/events?' + new URLSearchParams({ employeeRef: ref, from: day, to: day }));
-          const rows = latestFirst(evs).map((e) => punchCell(e, false)).join('');
+          const offs = ((PERSON.days || []).find((x) => x.day === day) || {}).locationOff || [];
+          const rows = [...evs.map((e) => ({ at: e.at, html: punchCell(e, false) })),
+            ...offs.map((w) => ({ at: w.from, html: offCell(w) }))]
+            .sort((a, b) => new Date(b.at) - new Date(a.at)).map((r) => r.html).join('');
           box.innerHTML = (rows || cellNote('Nothing recorded on this day.'))
             + `<button class="cell cell--action" type="button" data-fix="${esc(day)}">Fix times</button>`;
           box.querySelector('[data-fix]').onclick = () => {
@@ -1426,7 +1447,7 @@
           $('psum').textContent = days.length ? span(days.reduce((n, d) => n + liveOr(d.day, d.totalMinutes), 0)) : '';
           $('pdays').innerHTML = days.length
             ? days.map((d) => dayCell({ date: d.day, firstIn: d.firstIn, lastOut: d.lastOut, status: d.open ? 'open' : 'complete' },
-                liveOr(d.day, d.totalMinutes), { id: 'ppd-', flag: d.needsFix ? 'Needs a fix' : d.corrected ? 'Changed by a manager' : '' })).join('')
+                liveOr(d.day, d.totalMinutes), { id: 'ppd-', flag: d.needsFix ? fixLabel(d) : d.corrected ? 'Changed by a manager' : '' })).join('')
             : cellNote(emptyNote(PERSON));
           $('pdays').querySelectorAll('[data-day]').forEach((el) => {
             el.onclick = () => {
@@ -1537,6 +1558,8 @@
       const close = () => back.remove();
       const hand = (d && d.handOuts) || [];
       const flags = ((d && d.flags) || []).filter((f) => FLAG_TEXT[f]);
+      const offs = (d && d.locationOff) || [];
+      const offMinutes = offs.reduce((n, w) => n + (w.minutes || 0), 0);
       // The latest moment they were really there: the phone's exit after a hand
       // check-out, or a later departure if they came back (Jeeva, 15 Sep: out by
       // hand 10:51, left 15:25, back 15:33, gone 17:17 — the day ends at 17:17).
@@ -1548,9 +1571,13 @@
           `Checked out by hand at <b>${esc(timeOf(h.checkedOutAt))}</b>. The phone left the zone at <b>${esc(timeOf(h.leftZoneAt))}</b>.`).join('<br>')}${
           d.lastOut && d.lastOut > d.leftZoneAt ? `<br>Last left at <b>${esc(timeOf(d.lastOut))}</b>.` : ''}</div>` : ''}
         ${flags.length && !hand.length ? `<div class="note">${flags.map((f) => esc(FLAG_TEXT[f])).join('<br>')}</div>` : ''}
+        ${offs.length ? `<div class="evidence">${offs.map((w) =>
+          `Location off <b>${esc(offSpan(w))}</b>${w.earliest ? ` — may have started from ${esc(timeOf(w.earliest))}` : ''}.`).join('<br>')}
+          <br><button class="btn link" type="button" id="fxtakeoff">Take off ${esc(dur(offMinutes))}</button></div>` : ''}
         <div class="times">
           <label class="field">In<input type="time" id="fxin" value="${d && d.firstIn ? hmTZ(d.firstIn) : ''}"></label>
           <label class="field">Out<input type="time" id="fxout" value="${suggestOut ? hmTZ(suggestOut) : ''}"></label>
+          ${offs.length || (d && d.awayMinutes) ? `<label class="field wide">Time away (minutes)<input type="number" id="fxaway" min="0" step="1" inputmode="numeric" placeholder="0" value="${d && d.awayMinutes ? d.awayMinutes : ''}"></label>` : ''}
         </div>
         <div class="acts">
           ${d && d.corrected ? '<button class="btn" id="fxundo" type="button">Use the phone’s times</button>' : ''}
@@ -1574,6 +1601,7 @@
         } catch (e) { toast(e.message, true); }
       };
       if ($('fxundo')) $('fxundo').onclick = async () => { close(); await undo(); };
+      if ($('fxtakeoff')) $('fxtakeoff').onclick = () => { $('fxaway').value = offMinutes; $('fxaway').focus(); };
 
       $('fxsave').onclick = async () => {
         const inV = $('fxin').value, outV = $('fxout').value;
@@ -1584,7 +1612,8 @@
         if (lastOut <= firstIn) lastOut = zonedIso(addDaysYmd(day, 1), outV);
         $('fxsave').disabled = true;
         try {
-          await api(`/api/admin/days/${encodeURIComponent(ref)}/${day}`, { method: 'PUT', body: { firstIn, lastOut } });
+          const awayMinutes = $('fxaway') ? Math.round(Number($('fxaway').value || 0)) : 0;
+          await api(`/api/admin/days/${encodeURIComponent(ref)}/${day}`, { method: 'PUT', body: { firstIn, lastOut, awayMinutes } });
           close();
           toastUndo(`Saved · ${name} · ${dayLabel(day)}`, undo);
           go(TAB);

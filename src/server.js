@@ -488,6 +488,24 @@ app.post('/api/setMyReason', emp, async (req, res) => {
   }
   res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) });
 });
+// The phone saying it can no longer see this person leave — Location off, or
+// Eesa's location set so it cannot watch the zones — or that it can again. See
+// db.locationOffWindows for what the manager is then shown.
+app.post('/api/locationState', emp, async (req, res) => {
+  const { state, reason = '', source = 'app', clientAt = null, sentAt = null, clientId = null, lastOnAt = null } = req.body || {};
+  if (state !== 'off' && state !== 'on') {
+    return res.status(400).json({ ok: false, error: { code: 'BAD_STATE', message: 'state must be "off" or "on".' } });
+  }
+  // The same clock correction a punch gets, so a phone set wrong files the right time.
+  const when = db.punchTime({ clientAt, sentAt });
+  if (when.error) {
+    return res.status(422).json({ ok: false, error: { code: when.error, message: 'This report is more than 7 days old, so it was not filed.' } });
+  }
+  const seen = lastOnAt == null ? null : db.punchTime({ clientAt: lastOnAt, sentAt });
+  res.json({ ok: true, data: await db.recordLocationState(req.ctx.tenantId, req.ctx.sub, {
+    state, reason, source, clientId, at: when.at, lastOnAt: seen && !seen.error ? seen.at : null,
+  }) });
+});
 app.get('/api/getMyStatus', emp, async (req, res) => res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) }));
 app.get('/api/getMyZones', emp, async (req, res) => res.json({ ok: true, data: await db.listZones(req.ctx.tenantId) }));
 app.get('/api/getMyHistory', emp, async (req, res) =>
@@ -712,12 +730,12 @@ app.post('/api/admin/approvals', manager, async (req, res) => {
 
 // Fix times: a manager sets a day's real in and out.
 app.put('/api/admin/days/:employeeRef/:day', manager, async (req, res) => {
-  const { firstIn, lastOut, note = '' } = req.body || {};
+  const { firstIn, lastOut, note = '', awayMinutes = 0 } = req.body || {};
   const { employeeRef, day } = req.params;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
     return res.status(400).json({ ok: false, error: { code: 'BAD_DAY', message: 'The day must be YYYY-MM-DD.' } });
   }
-  const result = await db.setDayCorrection(req.ctx.tenantId, employeeRef, day, { firstIn, lastOut, note }, req.ctx.sub);
+  const result = await db.setDayCorrection(req.ctx.tenantId, employeeRef, day, { firstIn, lastOut, note, awayMinutes }, req.ctx.sub);
   if (!result.ok) {
     return res.status(400).json({ ok: false, error: { code: 'BAD_TIMES', message: result.problem } });
   }
@@ -988,7 +1006,7 @@ app.listen(port, () => {
   // this the first sign of a bad DATABASE_URL is a stack trace on whichever
   // request happens to arrive first.
   db.ensureSimplifyTables()
-    .then(() => startSummaries({ managerAudience }))
+    .then(() => startSummaries({ managerAudience, names: nameIndex }))
     .catch((e) => console.error('[attendance] could not prepare attendance tables:', e && e.message));
   db.ping()
     .then(() => console.log(`[attendance] database OK (${db.dbHost()})`))

@@ -75,20 +75,41 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 /// Roll a list of days (from db.listApprovals) up to what a summary says.
 export function rollUp(days) {
   const worked = days.filter((d) => d.totalMinutes > 0 || d.open || d.needsFix);
+  // Whose location was off while on the clock, and for how long. Not once a
+  // manager has fixed the day: that is the answer to it.
+  const off = new Map();
+  for (const d of worked) {
+    if (!(d.flags || []).includes('location_off')) continue;
+    const k = String(d.employeeRef);
+    const cur = off.get(k) || { employeeRef: k, name: d.name || '', minutes: 0 };
+    cur.minutes += (d.locationOff || []).reduce((n, w) => n + (w.minutes || 0), 0);
+    off.set(k, cur);
+  }
   return {
     people: new Set(worked.map((d) => String(d.employeeRef))).size,
     minutes: worked.reduce((n, d) => n + (d.totalMinutes || 0), 0),
     needsFix: worked.filter((d) => d.needsFix).length,
+    locationOff: [...off.values()].sort((a, b) => b.minutes - a.minutes),
   };
 }
 
+/// "Location off: Jeeva 1h 05m, Sami 20m" — who, and for how long. Three names
+/// at most; a push that scrolls is a push nobody finishes.
+export function locationOffLine(people) {
+  if (!people || !people.length) return '';
+  const named = people.slice(0, 3).map((p) => `${p.name || 'someone'} ${spanOf(p.minutes)}`);
+  const more = people.length - named.length;
+  return `Location off: ${named.join(', ')}${more ? ` and ${more} more` : ''}`;
+}
+
 /// The morning line. Null when there is nothing to say — no empty summaries.
-export function dailySummary(day, { people, minutes, needsFix }) {
+export function dailySummary(day, { people, minutes, needsFix, locationOff = [] }) {
   if (!people && !needsFix) return null;
   const fix = needsFix ? `${plural(needsFix, 'day needs', 'days need')} a fix` : 'all look right';
+  const off = locationOffLine(locationOff);
   return {
     title: `Attendance · ${dayLabel(day)}`,
-    body: `${plural(people, 'person', 'people')} · ${spanOf(minutes)} · ${fix}`,
+    body: `${plural(people, 'person', 'people')} · ${spanOf(minutes)} · ${fix}${off ? ` · ${off}` : ''}`,
   };
 }
 
