@@ -24,9 +24,16 @@ vm.runInContext([
   grab(/const FLAG_TEXT = \{[\s\S]*?\n    \};/),
   grab(/const PROOF = \{[\s\S]*?\n    \};/),
   grab(/const proofSpan = [^\n]*/),
+  grab(/const offSpan = [^\n]*/),
+  grab(/const SEVERITY = [^\n]*/),
+  grab(/const bySeverity = [^\n]*/),
+  grab(/const SHORT_FLAG = [^\n]*/),
+  grab(/const whyLine = \(d\) => \{[\s\S]*?\n    \};/),
+  grab(/const concern = \(d\) => \{[\s\S]*?\n    \};/),
+  grab(/const byConcern = [^\n]*/),
   grab(/const JUST_SHOWN = [^\n]*/),
   grab(/const fixLabel = \(d\) => \{[\s\S]*?\n    \};/),
-  'Object.assign(this, { FLAG_TEXT, PROOF, proofSpan, fixLabel });',
+  'Object.assign(this, { FLAG_TEXT, PROOF, proofSpan, fixLabel, whyLine, byConcern });',
 ].join('\n'), page);
 
 const sub = (e) => page.PROOF[e.flag].sub(e);
@@ -79,3 +86,42 @@ test('a broken log says whether entries went missing or were changed', () => {
   assert.equal(sub({ flag: 'log_gap', missing: 3 }), '3 entries missing');
   assert.equal(sub({ flag: 'log_gap', missing: 0 }), 'The log does not join up');
 });
+
+// Today lists the days to fix, each with why in one line.
+const at = (h, m = 0) => `2026-09-22T${String(h + 7).padStart(2, '0')}:${String(m).padStart(2, '0')}:00Z`; // PDT → UTC
+
+test('a day to fix says its most serious reason first, with when', () => {
+  const d = { day: '2026-09-22', flags: ['offline', 'went_quiet', 'phone_off'], integrity: [
+    { flag: 'went_quiet', at: at(15), until: at(16), missed: 3 },
+    { flag: 'phone_off', at: at(12), until: at(13, 56), missed: 6 },
+    { flag: 'offline', at: at(11), until: at(11, 20) },
+  ] };
+  assert.equal(page.whyLine(d), 'Phone switched off 12:00 PM – 01:56 PM · 1 more',
+    'switched off before stopped answering; no network is never the headline');
+});
+
+test('several stretches of the same thing are one problem, not several', () => {
+  const d = { day: '2026-09-22', flags: ['away'], integrity: [
+    { flag: 'away', at: at(12), until: at(12, 40), meters: 1400 },
+    { flag: 'away', at: at(15), until: at(15, 30), meters: 900 },
+  ] };
+  assert.equal(page.whyLine(d), 'Away from the zone 12:00 PM – 12:40 PM');
+});
+
+test('a day with only an old-style flag still says what it is', () => {
+  assert.equal(page.whyLine({ day: '2026-09-22', flags: ['no_check_out'] }), 'No check-out');
+});
+
+test('the most serious days come first, then the newest', () => {
+  const days = [
+    { day: '2026-09-23', flags: ['no_check_out'] },
+    { day: '2026-09-21', flags: ['clock_changed'], integrity: [{ flag: 'clock_changed', at: at(12) }] },
+    { day: '2026-09-22', flags: ['away'], integrity: [{ flag: 'away', at: at(12), meters: 900 }] },
+    { day: '2026-09-23', flags: ['location_off'], locationOff: [{ from: at(12), to: at(13) }] },
+  ];
+  assert.deepEqual([...days].sort(page.byConcern).map((d) => d.day),
+    ['2026-09-22', '2026-09-21', '2026-09-23', '2026-09-23']);
+  assert.deepEqual([...days].sort(page.byConcern).map((d) => d.flags[0]),
+    ['away', 'clock_changed', 'location_off', 'no_check_out']);
+});
+
