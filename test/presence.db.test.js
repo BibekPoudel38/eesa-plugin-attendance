@@ -55,6 +55,9 @@ describe('presence log and punch lock on a real database', { skip }, () => {
     // Not there yet on a fresh database: recordPresence builds it on first use.
     await db.pool.query(`delete from presence_log where tenant_id = $1`, [T]).catch(() => {});
     await db.pool.query(`delete from presence_checks where tenant_id = $1`, [T]).catch(() => {});
+    for (const t of ['presence_check_log', 'integrity_alerts']) {
+      await db.pool.query(`delete from ${t} where tenant_id = $1`, [T]).catch(() => {});
+    }
     await db.setTenantTimezone(T, TZ);
     const z = await db.pool.query(
       `insert into zones (tenant_id, name, center_lat, center_lng, radius_m) values ($1, 'Chups Anaheim', $2, $3, 100) returning id`,
