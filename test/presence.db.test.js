@@ -186,6 +186,26 @@ describe('presence log and punch lock on a real database', { skip }, () => {
     assert.equal(denied.isError, true, 'a staff member cannot read everyone');
   });
 
+  test('phone evidence older than a year is deleted, as the privacy policy says; newer is kept', async () => {
+    const put = (table, cols, vals) => db.pool.query(
+      `insert into ${table} (${cols.join(', ')}) values (${cols.map((_, i) => `$${i + 1}`).join(', ')})`, vals);
+    const old = new Date(Date.now() - 400 * 864e5).toISOString();
+    const recent = new Date(Date.now() - 10 * 864e5).toISOString();
+    await db.integrityAlerted(T, '99', daysAgo(1)); // makes the table
+    for (const [at, seq] of [[old, 900001], [recent, 900002]]) {
+      await put('presence_log', ['tenant_id', 'employee_ref', 'device_id', 'seq', 'at'], [T, '99', 'iphone-99', seq, at]);
+      await put('presence_check_log', ['tenant_id', 'employee_ref', 'sent_at'], [T, '99', at]);
+      await put('integrity_alerts', ['tenant_id', 'employee_ref', 'day', 'flag', 'alerted_at'], [T, '99', at.slice(0, 10), `away-${seq}`, at]);
+    }
+    const removed = await db.pruneOldEvidence();
+    assert.ok(removed.presence_log >= 1 && removed.presence_check_log >= 1 && removed.integrity_alerts >= 1, JSON.stringify(removed));
+    const left = async (table) => Number((await db.pool.query(
+      `select count(*) as n from ${table} where tenant_id = $1 and employee_ref = '99'`, [T])).rows[0].n);
+    assert.equal(await left('presence_log'), 1, 'the recent entry stays');
+    assert.equal(await left('presence_check_log'), 1);
+    assert.equal(await left('integrity_alerts'), 1);
+  });
+
   test('"still here?" goes to whoever is on the clock and quiet, once per twenty minutes', async () => {
     const now = Date.now();
     const every = 20 * MIN;

@@ -749,6 +749,34 @@ export async function markIntegrityAlerted(tenantId, employeeRef, day, flags) {
     [tenantId, String(employeeRef), day, flags]);
 }
 
+/// What a phone reported about a shift (its log, its Location on/off reports,
+/// the "still here?" asked of it, and the alerts they led to) is kept this
+/// long and then deleted, as the privacy policy says. The punches and hours
+/// are the time record and are kept with the workspace, not here.
+export const PHONE_EVIDENCE_KEEP_DAYS = 365;
+
+/// Delete phone evidence older than [days]. Each table on its own: one that
+/// does not exist yet (nothing ever sent to it) is skipped, not an error.
+export async function pruneOldEvidence({ days = PHONE_EVIDENCE_KEEP_DAYS } = {}) {
+  const cutoff = `now() - make_interval(days => $1::int)`;
+  const deletions = {
+    presence_log: `delete from presence_log where coalesce(server_at, at) < ${cutoff}`,
+    presence_check_log: `delete from presence_check_log where sent_at < ${cutoff}`,
+    integrity_alerts: `delete from integrity_alerts where alerted_at < ${cutoff}`,
+    location_states: `delete from location_states where at < ${cutoff}`,
+  };
+  const removed = {};
+  for (const [table, sql] of Object.entries(deletions)) {
+    try {
+      removed[table] = (await pool.query(sql, [days])).rowCount;
+    } catch (e) {
+      if (e && e.code === '42P01') continue; // no such table yet
+      throw e;
+    }
+  }
+  return removed;
+}
+
 /// A "still here?" that left for [employeeRef]'s phones at [at].
 export async function logPresenceCheck(tenantId, employeeRef, at = new Date()) {
   if (!(await ensurePresenceSchema())) return;

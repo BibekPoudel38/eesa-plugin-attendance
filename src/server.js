@@ -19,6 +19,7 @@ import { recordEvent } from './telemetry.js';
 import { startSummaries } from './summaries.js';
 import { startPresenceChecks } from './presence_checks.js';
 import { startIntegrityAlerts } from './integrity.js';
+import { startRetention } from './retention.js';
 import { spanOf } from './summary_plan.js';
 import { appRoleOf, uiRoleOf, rosterRoleOf } from './roles.js';
 
@@ -1024,6 +1025,7 @@ app.listen(port, () => {
       startSummaries({ managerAudience, names: nameIndex });
       startPresenceChecks();
       startIntegrityAlerts({ names: nameIndex });
+      startRetention();
     })
     .catch((e) => console.error('[attendance] could not prepare attendance tables:', e && e.message));
   db.ping()
