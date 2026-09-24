@@ -22,13 +22,18 @@ test('every twenty minutes, never more often than fifteen', () => {
 
 test('each person claimed gets one silent push, with nothing to show', async () => {
   const sent = [];
-  const store = { async claimPresenceChecks({ everyMs }) {
-    assert.equal(everyMs, 20 * 60 * 1000);
-    return [{ tenantId: 't1', employeeRef: '39' }, { tenantId: 't1', employeeRef: '41' }];
-  } };
+  const logged = [];
+  const store = {
+    async claimPresenceChecks({ everyMs }) {
+      assert.equal(everyMs, 20 * 60 * 1000);
+      return [{ tenantId: 't1', employeeRef: '39' }, { tenantId: 't1', employeeRef: '41' }];
+    },
+    async logPresenceCheck(tenantId, ref) { logged.push(ref); },
+  };
   const n = await runPresenceChecks({ store, notify: (t, u, msg) => sent.push({ t, u, msg }), everyMs: 20 * 60 * 1000 });
   assert.equal(n, 2);
   assert.deepEqual(sent.map((s) => s.u), ['39', '41']);
+  assert.deepEqual(logged, ['39', '41'], 'each question asked is kept, to count the unanswered');
   for (const { msg } of sent) {
     assert.equal(msg.silent, true);
     assert.equal(msg.title, undefined, 'no title: nothing on screen');
@@ -60,3 +65,14 @@ test('a silent push reaches the backend without a title, marked silent', async (
   assert.equal(mine[0].body.title, '');
   assert.equal(mine[0].body.type, KIND);
 });
+
+test('a push the backend refused is not a question asked', async () => {
+  const logged = [];
+  const store = {
+    claimPresenceChecks: async () => [{ tenantId: 't1', employeeRef: '39' }],
+    logPresenceCheck: async (tenantId, ref) => { logged.push(ref); },
+  };
+  await runPresenceChecks({ store, notify: async () => false });
+  assert.deepEqual(logged, [], 'or an honest phone would look quiet while the backend was down');
+});
+

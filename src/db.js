@@ -401,12 +401,22 @@ const MAX_CLOCK_SKEW_MS = 60 * 1000;
 /// Returns { at, skewMs }, with at null for a live punch the server times
 /// itself; or { error } for a punch older than a week, which is refused and
 /// said so rather than quietly moved to today.
-export function punchTime({ clientAt, sentAt } = {}, now = Date.now()) {
-  const happened = Number(clientAt);
-  if (!Number.isFinite(happened) || happened <= 0) return { at: null, skewMs: null };
+export function punchTime({ clientAt, sentAt, ageMs = null } = {}, now = Date.now()) {
   const sent = Number(sentAt);
   const drift = Number.isFinite(sent) && sent > 0 ? now - sent : 0;
   const skewMs = Math.abs(drift) > MAX_CLOCK_SKEW_MS ? Math.round(drift) : 0;
+  // How long ago it happened by the phone's stopwatch, which counts through
+  // sleep and cannot be set, when the phone could vouch for the whole time.
+  // A clock moved while offline and put back before sending leaves clientAt
+  // wrong and sentAt right, so no skew shows — this still lands the punch
+  // where it happened.
+  const age = ageMs == null || ageMs === '' ? NaN : Number(ageMs);
+  if (Number.isFinite(age) && age >= 0) {
+    if (age > MAX_BACKDATE_MS) return { error: 'PUNCH_TOO_OLD', skewMs };
+    return { at: new Date(now - Math.trunc(age)).toISOString(), skewMs };
+  }
+  const happened = Number(clientAt);
+  if (!Number.isFinite(happened) || happened <= 0) return { at: null, skewMs: null };
   const at = happened + skewMs;
   if (now - at > MAX_BACKDATE_MS) return { error: 'PUNCH_TOO_OLD', skewMs };
   // Nothing happens after now.
@@ -617,6 +627,14 @@ async function ensurePresenceSchema() {
         sent_at timestamptz not null default now(),
         primary key (tenant_id, employee_ref)
       )`);
+      // Every "still here?" that left, so an unanswered one can be counted.
+      await pool.query(`create table if not exists presence_check_log (
+        tenant_id text not null,
+        employee_ref text not null,
+        sent_at timestamptz not null
+      )`);
+      await pool.query(`create index if not exists presence_check_log_person_at
+        on presence_check_log (tenant_id, employee_ref, sent_at)`);
       return true;
     } catch (e) {
       console.error('[attendance] could not add the presence log:', e && e.message);
@@ -695,8 +713,15 @@ export async function claimPresenceChecks({ everyMs, now = Date.now() } = {}) {
   return rows.map((r) => ({ tenantId: r.tenant_id, employeeRef: String(r.employee_ref) }));
 }
 
+/// A "still here?" that left for [employeeRef]'s phones at [at].
+export async function logPresenceCheck(tenantId, employeeRef, at = new Date()) {
+  if (!(await ensurePresenceSchema())) return;
+  await q(`insert into presence_check_log (tenant_id, employee_ref, sent_at) values ($1, $2, $3)`,
+    [tenantId, String(employeeRef), new Date(at).toISOString()]);
+}
+
 /// What the phones' logs say about each (person, shift day) in a window, in
-/// three queries. Key: `${employeeRef}|${YYYY-MM-DD}` → [{flag, at, until?, …}].
+/// four queries. Key: `${employeeRef}|${YYYY-MM-DD}` → [{flag, at, until?, …}].
 ///
 /// Evidence, never the day itself: a failure here is reported and the days are
 /// shown without it, rather than taking the manager's page and the morning
@@ -733,7 +758,22 @@ async function presenceIndexNow(tenantId, { from = null, to = null, employeeRef 
       order by employee_ref, device_id, seq`,
     [tenantId, tz, f, t, ref],
   );
-  if (!logs.length) return out;
+  const asked = await q(
+    `select employee_ref, (extract(epoch from sent_at) * 1000)::bigint as at
+       from presence_check_log
+      where tenant_id = $1
+        and sent_at >= ((($3::date - 1)::timestamp) at time zone $2)
+        and sent_at <  ((($4::date + 2)::timestamp) at time zone $2)
+        and ($5::text is null or employee_ref = $5)`,
+    [tenantId, tz, f, t, ref],
+  );
+  if (!logs.length && !asked.length) return out;
+  const checksOf = new Map();
+  for (const r of asked) {
+    const k = String(r.employee_ref);
+    if (!checksOf.has(k)) checksOf.set(k, []);
+    checksOf.get(k).push(Number(r.at));
+  }
   const entriesOf = new Map();
   for (const r of logs) {
     const k = String(r.employee_ref);
@@ -758,7 +798,7 @@ async function presenceIndexNow(tenantId, { from = null, to = null, employeeRef 
         and at >= ((($3::date - 1)::timestamp) at time zone $2)
         and at <  ((($4::date + 2)::timestamp) at time zone $2)
       order by employee_ref, at`,
-    [tenantId, tz, f, t, [...entriesOf.keys()]],
+    [tenantId, tz, f, t, [...new Set([...entriesOf.keys(), ...checksOf.keys()])]],
   );
   const punches = new Map();
   for (const e of events) {
@@ -779,7 +819,7 @@ async function presenceIndexNow(tenantId, { from = null, to = null, employeeRef 
       const intervals = computeToday(dayEvents, { now }).intervals.map((iv) => ({
         from: iv.from, to: iv.to, zone: zoneAt.get(new Date(iv.from).getTime()) || null,
       }));
-      const evidence = presenceEvidence(intervals, entriesOf.get(k) || []);
+      const evidence = presenceEvidence(intervals, entriesOf.get(k) || [], checksOf.get(k) || []);
       if (evidence.length) {
         out.set(`${k}|${day}`, evidence.map((ev) => ({
           ...ev, at: iso(new Date(ev.at)), ...(ev.until != null ? { until: iso(new Date(ev.until)) } : {}),
@@ -1377,7 +1417,7 @@ export function computeToday(
 /// `at` is when it NOTICED, and `lastOnAt` the last time it saw location
 /// working. The real moment lies between the two.
 export const LOCATION_REASONS = new Set(['services_off', 'denied', 'while_in_use', 'approximate', 'attendance_off']);
-const LOCATION_SOURCES = new Set(['app', 'geofence']);
+const LOCATION_SOURCES = new Set(['app', 'geofence', 'push']);
 /// Shorter than this is a switch flicked off and on, not a trip anywhere.
 export const MIN_LOCATION_OFF_MS = 5 * 60 * 1000;
 

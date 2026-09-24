@@ -398,8 +398,8 @@ function punchOutcome(ev) {
 /// punch, the trace that leads back to the phone's log, and the fix's age.
 /// Null when the punch is too old to file, after the refusal has been sent.
 function punchDetails(req, res) {
-  const { clientAt = null, sentAt = null, clientId = null, fixAgeMs = null } = req.body || {};
-  const when = db.punchTime({ clientAt, sentAt });
+  const { clientAt = null, sentAt = null, clientId = null, fixAgeMs = null, ageMs = null } = req.body || {};
+  const when = db.punchTime({ clientAt, sentAt, ageMs });
   if (when.error) {
     res.status(422).json({ ok: false, error: { code: when.error,
       message: 'This punch is more than 7 days old, so it was not filed. A manager can add the time with Fix times.' } });

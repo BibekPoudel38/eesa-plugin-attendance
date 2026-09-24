@@ -9,7 +9,7 @@ import { recordEvent } from './telemetry.js';
 /// [silent]: wake the app with nothing on screen and nothing in the inbox — the
 /// phone does some work and goes back to sleep. Needs no title.
 export async function notifyUser(tenantId, userId, { title = '', body = '', type = 'attendance', data = {}, silent = false }) {
-  if (!GATEWAY_SECRET || !tenantId || !userId || (!title && !silent)) return;
+  if (!GATEWAY_SECRET || !tenantId || !userId || (!title && !silent)) return false;
   // Best-effort, but no longer SILENT.
   //
   // This never read the response status and swallowed every exception, so a
@@ -43,6 +43,7 @@ export async function notifyUser(tenantId, userId, { title = '', body = '', type
     errorMessage: detail,
     context: { kind: type },
   });
+  return outcome === 'ok';
 }
 
 /// Fan a notification out to several people at once — the managers who want to

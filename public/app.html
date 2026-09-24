@@ -619,6 +619,9 @@
       log_gap: 'Part of the phone’s log is missing or was changed on the phone.',
       offline: 'No network for part of the shift (airplane mode or no signal). The phone kept its log and sent it later.',
       restarted: 'The phone was switched off and on during the shift.',
+      phone_off: 'The phone was switched off during the shift: it stopped answering, then came back restarted.',
+      went_quiet: 'The phone stopped answering during the shift, then answered again: airplane mode, Location off, or Eesa closed.',
+      silent: 'The phone did not answer "still here?" for part of the shift.',
     };
     // What the phone's own log showed during the shift, one line each: what
     // happened, and the evidence for it. Hours are never changed by these; the
@@ -631,6 +634,9 @@
         : e.missing ? `${e.missing} ${e.missing === 1 ? 'entry' : 'entries'} missing` : 'The log does not join up') },
       offline: { title: 'No network', sub: () => 'Airplane mode or no signal · the phone kept its log' },
       restarted: { title: 'Phone restarted', sub: () => 'Switched off and on in this time' },
+      phone_off: { title: 'Phone switched off', sub: (e) => `${e.missed} checks unanswered, then restarted` },
+      went_quiet: { title: 'Stopped answering', sub: (e) => `${e.missed} checks unanswered, then answered again` },
+      silent: { title: 'No answer', sub: (e) => `${e.missed} checks unanswered` },
     };
     const proofSpan = (e) => (e.until && e.until !== e.at ? `${timeOf(e.at)} – ${timeOf(e.until)}` : timeOf(e.at));
     // Why the phone could not see them leave, in the words of the setting.
@@ -644,9 +650,11 @@
     // "2:05 PM – 3:10 PM", or "since 2:05 PM" while it is still off.
     const offSpan = (w) => (w.open ? `since ${timeOf(w.from)}` : `${timeOf(w.from)} – ${timeOf(w.to)}`);
     // A day with one kind of problem reads as that problem, not a vaguer "Needs a
-    // fix". No network and a restart happen to honest phones; they never name a day.
+    // fix". No network, a restart or no answer happen to honest phones; they
+    // never name a day.
+    const JUST_SHOWN = new Set(['offline', 'restarted', 'silent']);
     const fixLabel = (d) => {
-      const kinds = [...new Set((d.flags || []).filter((f) => f !== 'offline' && f !== 'restarted'))];
+      const kinds = [...new Set((d.flags || []).filter((f) => !JUST_SHOWN.has(f)))];
       if (kinds.length !== 1) return 'Needs a fix';
       return kinds[0] === 'location_off' ? 'Location off' : (PROOF[kinds[0]] || {}).title || 'Needs a fix';
     };

@@ -73,3 +73,30 @@ test('rubbish is ignored rather than thrown', () => {
   }
   assert.equal(punchTime({ clientAt: NOW - hours(1), sentAt: 'garbage' }, NOW).at, iso(NOW - hours(1)));
 });
+
+// The clock trick: offline, the clock set five hours ahead, the departure at
+// 12:00 written as "17:00", the clock put back, sent at 17:05. clientAt is
+// wrong and sentAt is right, so no skew shows. The phone's stopwatch knows the
+// punch is 5h05m old.
+test('a clock moved offline and put back cannot move a punch: the stopwatch places it', () => {
+  const left = NOW - hours(5) - minutes(5);
+  const r = punchTime({ clientAt: left + hours(5), sentAt: NOW, ageMs: hours(5) + minutes(5) }, NOW);
+  assert.equal(r.at, iso(left));
+});
+
+test('without the stopwatch the old rule still stands', () => {
+  const when = NOW - hours(4);
+  assert.equal(punchTime({ clientAt: when, sentAt: NOW, ageMs: null }, NOW).at, iso(when));
+  assert.equal(punchTime({ clientAt: when, sentAt: NOW, ageMs: '' }, NOW).at, iso(when));
+});
+
+test('a stopwatch reading that makes no sense is not trusted', () => {
+  const when = NOW - hours(4);
+  for (const bad of [-1, 'soon', NaN, Infinity]) {
+    assert.equal(punchTime({ clientAt: when, sentAt: NOW, ageMs: bad }, NOW).at, iso(when), String(bad));
+  }
+});
+
+test('a punch older than a week by the stopwatch is refused, as by the clock', () => {
+  assert.equal(punchTime({ clientAt: NOW, sentAt: NOW, ageMs: days(8) }, NOW).error, 'PUNCH_TOO_OLD');
+});

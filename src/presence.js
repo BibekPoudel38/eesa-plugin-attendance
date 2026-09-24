@@ -138,12 +138,59 @@ function mergeRuns(items, flag, gapMs) {
   return runs;
 }
 
+/// Silence worth showing: this many "still here?" in a row unanswered, over at
+/// least an hour.
+export const SILENT_MIN_CHECKS = 3;
+export const SILENT_MIN_MS = 60 * 60 * 1000;
+/// A check is answered by any entry, from any of their phones, before the next
+/// check or within this long of it — iOS can hold a push for minutes.
+export const ANSWER_WINDOW_MS = 15 * 60 * 1000;
+
+/// Stretches of a shift when the phone did not answer "still here?".
+///
+/// Honest phones go quiet too — swiped away all day, Background App Refresh
+/// off — so silence on its own is only shown. Two shapes of it are more:
+///   phone_off   the first sign of life after it says the phone had restarted:
+///               it was switched off.
+///   went_quiet  it was answering, stopped for an hour or more, then answered
+///               again: airplane mode, Location off with Eesa closed, or Eesa
+///               swiped away and opened again.
+function silenceEvidence(spans, entries, checks) {
+  const times = entries.map((e) => ({ t: when(e), e })).sort((a, b) => a.t - b.t);
+  const out = [];
+  for (const span of spans) {
+    const asked = checks.filter((c) => c >= span.from && c <= span.to).sort((a, b) => a - b);
+    let run = [];
+    const close = () => {
+      if (run.length >= SILENT_MIN_CHECKS) {
+        const first = run[0];
+        const next = times.find(({ t }) => t > run[run.length - 1] && t <= span.to);
+        const until = next ? next.t : span.to;
+        if (until - first >= SILENT_MIN_MS) {
+          const before = times.some(({ t }) => t >= span.from && t < first);
+          const flag = next && next.e.restarted === true ? 'phone_off' : before && next ? 'went_quiet' : 'silent';
+          out.push({ flag, at: first, until, missed: run.length });
+        }
+      }
+      run = [];
+    };
+    asked.forEach((c, i) => {
+      const upTo = Math.max(c + ANSWER_WINDOW_MS, asked[i + 1] ?? 0);
+      if (times.some(({ t }) => t >= c && t < upTo)) close();
+      else run.push(c);
+    });
+    close();
+  }
+  return out;
+}
+
 /// The evidence a phone's log gives for one person's shifts.
 ///
 /// [intervals]: [{from: Date|ms, to: Date|ms, zone: {name, lat, lng, radiusM}|null}]
 /// [entries]:   normalized entries, any phones, any order.
-/// Returns [{flag, at, until?, meters?, zone?}] — only what falls in a shift.
-export function presenceEvidence(intervals, entries) {
+/// [checks]:    when the server asked "still here?", epoch ms.
+/// Returns [{flag, at, until?, meters?, zone?, missed?}] — only what falls in a shift.
+export function presenceEvidence(intervals, entries, checks = []) {
   const spans = (intervals || []).map((iv) => ({
     from: +new Date(iv.from), to: +new Date(iv.to), zone: iv.zone || null,
   }));
@@ -189,10 +236,14 @@ export function presenceEvidence(intervals, entries) {
   }
   away.sort((a, b) => a.at - b.at);
   offline.sort((a, b) => a.at - b.at);
+  const silence = silenceEvidence(spans, entries || [], checks || []);
+  // A switch-off is said once: the restart it ended with is the same event.
+  const offUntil = new Set(silence.filter((x) => x.flag === 'phone_off').map((x) => x.until));
   const out = [
     ...mergeRuns(away, 'away', 20 * 60 * 1000).map((r) => ({ ...r, zone: away.find((a) => a.at === r.at)?.zone || null })),
     ...mergeRuns(offline, 'offline', 5 * 60 * 1000),
-    ...single,
+    ...single.filter((x) => !(x.flag === 'restarted' && offUntil.has(x.until))),
+    ...silence,
   ];
   return out.sort((a, b) => a.at - b.at);
 }
@@ -200,4 +251,4 @@ export function presenceEvidence(intervals, entries) {
 /// Evidence strong enough that a manager should not approve without looking.
 /// Offline and restarted alone happen to honest phones every day; they are
 /// shown, not held against anyone.
-export const STRONG_FLAGS = new Set(['away', 'simulated', 'clock_changed', 'log_gap']);
+export const STRONG_FLAGS = new Set(['away', 'simulated', 'clock_changed', 'log_gap', 'phone_off', 'went_quiet']);

@@ -155,3 +155,49 @@ test('junk is dropped, not guessed at', () => {
   assert.equal(e.lat, null, 'an impossible latitude is no fix at all');
   assert.equal(e.accuracyM, null, 'and has no accuracy to claim');
 });
+
+// "Still here?" every 20 minutes through the shift, answered or not.
+const ASKED = Array.from({ length: 11 }, (_, i) => T0 + (20 + i * 20) * MIN); // 13:25 … 16:45
+const answersTo = (asks, rows = {}) => chain(asks.map((c) => ({ at: c + MIN, ...rows[c] })));
+
+test('every check answered: nothing to say', () => {
+  assert.deepEqual(presenceEvidence(SHIFT, answersTo(ASKED), ASKED), []);
+});
+
+test('answering, an hour of silence, answering again: airplane mode or Location off, and it needs a look', () => {
+  const quiet = ASKED.slice(3, 6); // 14:25, 14:45, 15:05
+  const log = answersTo(ASKED.filter((c) => !quiet.includes(c)));
+  const ev = presenceEvidence(SHIFT, log, ASKED);
+  assert.deepEqual(ev.map((x) => x.flag), ['went_quiet'], JSON.stringify(ev));
+  assert.equal(ev[0].at, quiet[0]);
+  assert.equal(ev[0].missed, 3);
+  assert.ok(STRONG_FLAGS.has('went_quiet'));
+});
+
+test('silence that ends in a restart is the phone switched off, said once', () => {
+  const quiet = ASKED.slice(3, 7);
+  const answered = ASKED.filter((c) => !quiet.includes(c));
+  const back = answered.find((c) => c > quiet[quiet.length - 1]);
+  const log = answersTo(answered, { [back]: { restarted: true } });
+  const ev = presenceEvidence(SHIFT, log, ASKED);
+  assert.deepEqual(ev.map((x) => x.flag), ['phone_off'], 'and no separate "restarted" for the same event');
+  assert.equal(ev[0].missed, 4);
+  assert.ok(STRONG_FLAGS.has('phone_off'));
+});
+
+test('a phone that never answers all shift is only shown: swiped away or refresh off', () => {
+  const ev = presenceEvidence(SHIFT, [], ASKED);
+  assert.deepEqual(ev.map((x) => x.flag), ['silent']);
+  assert.ok(!STRONG_FLAGS.has('silent'));
+});
+
+test('two checks missed is not silence', () => {
+  const log = answersTo(ASKED.filter((c) => c !== ASKED[3] && c !== ASKED[4]));
+  assert.deepEqual(presenceEvidence(SHIFT, log, ASKED), []);
+});
+
+test('a push iOS held for ten minutes still counts as answered', () => {
+  const log = chain(ASKED.map((c) => ({ at: c + 10 * MIN })));
+  assert.deepEqual(presenceEvidence(SHIFT, log, ASKED), []);
+});
+

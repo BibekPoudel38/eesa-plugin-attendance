@@ -24,6 +24,7 @@ vm.runInContext([
   grab(/const FLAG_TEXT = \{[\s\S]*?\n    \};/),
   grab(/const PROOF = \{[\s\S]*?\n    \};/),
   grab(/const proofSpan = [^\n]*/),
+  grab(/const JUST_SHOWN = [^\n]*/),
   grab(/const fixLabel = \(d\) => \{[\s\S]*?\n    \};/),
   'Object.assign(this, { FLAG_TEXT, PROOF, proofSpan, fixLabel });',
 ].join('\n'), page);
@@ -31,7 +32,7 @@ vm.runInContext([
 const sub = (e) => page.PROOF[e.flag].sub(e);
 
 test('every flag the phone\'s log can raise has words on the page', () => {
-  for (const f of [...STRONG_FLAGS, 'offline', 'restarted']) {
+  for (const f of [...STRONG_FLAGS, 'offline', 'restarted', 'silent']) {
     assert.ok(page.FLAG_TEXT[f], `no explanation for ${f}`);
     assert.ok(page.PROOF[f], `no evidence line for ${f}`);
   }
@@ -43,9 +44,15 @@ test('a day with one kind of problem is named by it', () => {
   assert.equal(page.fixLabel({ flags: ['location_off'] }), 'Location off', 'the old label is kept');
 });
 
-test('no network or a restart never names a day on its own', () => {
+test('no network, a restart or no answer never names a day on its own', () => {
   assert.equal(page.fixLabel({ flags: ['away', 'offline'] }), 'Away from the zone');
   assert.equal(page.fixLabel({ flags: ['location_off', 'restarted'] }), 'Location off');
+  assert.equal(page.fixLabel({ flags: ['phone_off', 'silent'] }), 'Phone switched off');
+});
+
+test('silence says how many checks went unanswered', () => {
+  assert.equal(sub({ flag: 'phone_off', missed: 6 }), '6 checks unanswered, then restarted');
+  assert.equal(sub({ flag: 'went_quiet', missed: 3 }), '3 checks unanswered, then answered again');
 });
 
 test('two different problems read as "Needs a fix"', () => {

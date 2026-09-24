@@ -30,7 +30,10 @@ export function startPresenceChecks() {
 export async function runPresenceChecks({ store = db, notify = notifyUser, now = Date.now(), everyMs = checkEveryMs() } = {}) {
   const due = await store.claimPresenceChecks({ everyMs, now });
   for (const p of due) {
-    notify(p.tenantId, p.employeeRef, { silent: true, type: KIND, data: { kind: KIND } });
+    const sent = await notify(p.tenantId, p.employeeRef, { silent: true, type: KIND, data: { kind: KIND } });
+    // Only a push that left is a question asked. One the backend refused
+    // cannot go unanswered, and counting it would make an honest phone look quiet.
+    if (sent !== false) await store.logPresenceCheck(p.tenantId, p.employeeRef, new Date(now)).catch(() => {});
   }
   return due.length;
 }
