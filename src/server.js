@@ -18,6 +18,7 @@ import { notifyUser, notifyUsers } from './notify.js';
 import { recordEvent } from './telemetry.js';
 import { startSummaries } from './summaries.js';
 import { startPresenceChecks } from './presence_checks.js';
+import { startIntegrityAlerts } from './integrity.js';
 import { spanOf } from './summary_plan.js';
 import { appRoleOf, uiRoleOf, rosterRoleOf } from './roles.js';
 
@@ -111,7 +112,7 @@ app.post('/mcp', async (req, res) => {
   try {
     requireGateway(req);
     const ctx = await verifyToken(req.get('Authorization'));
-    const result = await handleRpc(body, ctx, serverInfo);
+    const result = await handleRpc(body, ctx, serverInfo, { names: nameIndex });
     if (isNotification || result === null) return res.status(202).end();
     return res.json({ jsonrpc: '2.0', id: body.id, result });
   } catch (e) {
@@ -1019,7 +1020,11 @@ app.listen(port, () => {
   // this the first sign of a bad DATABASE_URL is a stack trace on whichever
   // request happens to arrive first.
   db.ensureSimplifyTables()
-    .then(() => { startSummaries({ managerAudience, names: nameIndex }); startPresenceChecks(); })
+    .then(() => {
+      startSummaries({ managerAudience, names: nameIndex });
+      startPresenceChecks();
+      startIntegrityAlerts({ names: nameIndex });
+    })
     .catch((e) => console.error('[attendance] could not prepare attendance tables:', e && e.message));
   db.ping()
     .then(() => console.log(`[attendance] database OK (${db.dbHost()})`))

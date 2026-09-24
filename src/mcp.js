@@ -1,6 +1,7 @@
 // Attendance MCP surface — maps agent tools onto the same data layer the REST
 // hot path uses. Pure JSON-RPC logic; the HTTP/envelope concerns live in server.js.
 import * as db from './db.js';
+import { dayReport, FLAG_WORDS } from './integrity.js';
 
 const PROTOCOL = '2025-06-18';
 
@@ -47,6 +48,32 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'attendance_needs_a_look',
+    description:
+      "Shifts that need a manager's look before they are approved, each with the phone's evidence in words: away from the zone, phone switched off, stopped answering, Location off, a location made by software, a clock moved by hand, a broken log, a missing check-out. Hours are never cut for these; the manager decides. Default: yesterday and today. Use for \"who needs a look\", \"any attendance problems\", \"was anyone cheating\".",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'First day, YYYY-MM-DD. Default yesterday.' },
+        to: { type: 'string', description: 'Last day, YYYY-MM-DD. Default today.' },
+      },
+    },
+  },
+  {
+    name: 'attendance_day_evidence',
+    description:
+      "One person's day in full: every check-in and check-out with where it was recorded, the hours, what needs a look, and the phone's evidence in words. Use to answer why a day was flagged, or what someone's phone saw.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        day: { type: 'string', description: 'The day, YYYY-MM-DD.' },
+        employee_ref: { type: 'string', description: 'Their id, if known.' },
+        name: { type: 'string', description: 'Or their name (or part of it).' },
+      },
+      required: ['day'],
+    },
+  },
+  {
     name: 'get_my_status',
     description: "Get the current user's attendance status today",
     inputSchema: { type: 'object', properties: {} },
@@ -71,6 +98,7 @@ const STAFF_TOOLS = new Set(['get_my_status', 'get_my_history']);
 const ADMIN_TOOLS = new Set([
   'who_is_present', 'who_is_absent', 'attendance_summary', 'who_is_late',
   'list_nfc_tags', 'get_my_status', 'get_my_history',
+  'attendance_needs_a_look', 'attendance_day_evidence',
 ]);
 const TOOL_NAMES = new Set(TOOLS.map((t) => t.name));
 
@@ -89,7 +117,8 @@ function callerRef(ctx) {
   return null;
 }
 
-export async function handleRpc(body, ctx, serverInfo) {
+/// [helpers.names](tenantId) → Map(employeeRef → name), from the Eesa roster.
+export async function handleRpc(body, ctx, serverInfo, helpers = {}) {
   const { method, params = {} } = body;
   if (method === 'initialize') {
     return { protocolVersion: PROTOCOL, capabilities: { tools: {} }, serverInfo };
@@ -109,7 +138,7 @@ export async function handleRpc(body, ctx, serverInfo) {
     const name = params.name;
     const args = params.arguments || {};
     try {
-      const result = await runTool(name, args, ctx);
+      const result = await runTool(name, args, ctx, helpers);
       const text = typeof result === 'string' ? result : JSON.stringify(result);
       return { content: [{ type: 'text', text }], isError: false };
     } catch (e) {
@@ -122,7 +151,7 @@ export async function handleRpc(body, ctx, serverInfo) {
   throw err;
 }
 
-async function runTool(name, args, ctx) {
+async function runTool(name, args, ctx, { names = null } = {}) {
   // Unknown tool → JSON-RPC method-not-found (distinct from a permission denial).
   if (!TOOL_NAMES.has(name)) {
     const err = new Error('Unknown tool: ' + name);
@@ -164,9 +193,48 @@ async function runTool(name, args, ctx) {
   if (name === 'list_nfc_tags') {
     return { tags: await db.listNfcTags(ctx.tenantId) };
   }
+  if (name === 'attendance_needs_a_look' || name === 'attendance_day_evidence') {
+    const tz = await db.getTenantTimezone(ctx.tenantId);
+    const byRef = names ? await names(ctx.tenantId).catch(() => new Map()) : new Map();
+    const report = (row) => dayReport(row, { name: byRef.get(String(row.employeeRef)), tz });
+    if (name === 'attendance_needs_a_look') {
+      const today = db.localDay(Date.now(), tz);
+      const from = isDay(args.from) ? args.from : db.localDay(Date.now() - 864e5, tz);
+      const to = isDay(args.to) ? args.to : today;
+      const days = (await db.listApprovals(ctx.tenantId, { from, to })).filter((r) => r.needsFix).map(report);
+      return { from, to, count: days.length, days };
+    }
+    if (!isDay(args.day)) throw new Error('day must be YYYY-MM-DD.');
+    let ref = args.employee_ref ? String(args.employee_ref) : null;
+    if (!ref && args.name) {
+      const want = String(args.name).trim().toLowerCase();
+      const hits = [...byRef.entries()].filter(([, n]) => String(n).toLowerCase().includes(want));
+      if (hits.length !== 1) {
+        return { found: false, matches: hits.map(([r, n]) => ({ employee_ref: r, name: n })),
+          message: hits.length ? 'Several people match: say which.' : 'Nobody by that name.' };
+      }
+      ref = hits[0][0];
+    }
+    if (!ref) throw new Error('Give employee_ref or name.');
+    const row = (await db.listApprovals(ctx.tenantId, { from: args.day, to: args.day }))
+      .find((r) => String(r.employeeRef) === ref);
+    const punches = (await db.eventLog(ctx.tenantId, { employeeRef: ref, from: args.day, to: args.day }))
+      .sort((a, b) => new Date(a.at) - new Date(b.at))
+      .map((e) => ({
+        what: e.type === 'check_in' ? 'Checked in' : 'Checked out',
+        at: new Date(e.at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz }),
+        where: e.zoneName || null,
+        how: e.source,
+        verified: e.verification,
+      }));
+    if (!row) return { found: false, employee_ref: ref, name: byRef.get(ref) || null, day: args.day, punches, message: 'Nothing recorded that day.' };
+    return { found: true, ...report(row), punches, flagWords: FLAG_WORDS };
+  }
 
   // Safety net: a tool that is defined and in an allowed set but has no handler
   // here (e.g. mark_attendance, which is intentionally kept out of every allowed
   // set so it never reaches this point — writes go through the REST hot path).
   throw new Error(`Tool "${name}" is not available on the agent surface.`);
 }
+
+const isDay = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);

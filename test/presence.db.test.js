@@ -151,6 +151,36 @@ describe('presence log and punch lock on a real database', { skip }, () => {
     assert.deepEqual((await dayRow('39', D)).flags, ['away'], 'and the evidence is back once it can be read');
   });
 
+  test('the tenant agent reads who needs a look, and one day in full', async () => {
+    const { handleRpc } = await import('../src/mcp.js');
+    const names = async () => new Map([['39', 'Jeeva'], ['46', 'Anbu']]);
+    const call = (name, args, appRole = 'admin') => handleRpc(
+      { method: 'tools/call', params: { name, arguments: args } }, { tenantId: T, appRole, sub: 'gateway' }, {}, { names });
+    const read = (r) => JSON.parse(r.content[0].text);
+
+    const listed = await handleRpc({ method: 'tools/list' }, { tenantId: T, appRole: 'admin' }, {}, { names });
+    for (const t of ['attendance_needs_a_look', 'attendance_day_evidence']) {
+      assert.ok(listed.tools.some((x) => x.name === t), `${t} is offered to admins`);
+    }
+    const staffList = await handleRpc({ method: 'tools/list' }, { tenantId: T, appRole: 'staff' }, {}, { names });
+    assert.ok(!staffList.tools.some((x) => x.name === 'attendance_needs_a_look'), 'never to staff');
+
+    const look = read(await call('attendance_needs_a_look', { from: daysAgo(5), to: daysAgo(1) }));
+    const jeeva = look.days.find((d) => d.employeeRef === '39');
+    assert.equal(jeeva.name, 'Jeeva');
+    assert.ok(jeeva.flags.includes('Away from the zone'), JSON.stringify(jeeva));
+    assert.ok(jeeva.evidence.some((l) => /^Away from the zone .*km from Chups Anaheim/.test(l)), JSON.stringify(jeeva.evidence));
+    assert.ok(look.days.some((d) => d.employeeRef === '46' && d.flags.includes('Clock changed by hand')));
+
+    const day = read(await call('attendance_day_evidence', { name: 'jee', day: daysAgo(2) }));
+    assert.equal(day.found, true);
+    assert.equal(day.hours, '4h 00m');
+    assert.deepEqual(day.punches.map((x) => x.what), ['Checked in', 'Checked out']);
+
+    const denied = await call('attendance_needs_a_look', {}, 'staff');
+    assert.equal(denied.isError, true, 'a staff member cannot read everyone');
+  });
+
   test('"still here?" goes to whoever is on the clock and quiet, once per twenty minutes', async () => {
     const now = Date.now();
     const every = 20 * MIN;

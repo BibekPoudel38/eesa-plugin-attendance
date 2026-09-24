@@ -713,6 +713,42 @@ export async function claimPresenceChecks({ everyMs, now = Date.now() } = {}) {
   return rows.map((r) => ({ tenantId: r.tenant_id, employeeRef: String(r.employee_ref) }));
 }
 
+/// Which kinds of evidence were already told to Eesa's flows, per person-day,
+/// so a shift that needs a look is announced once per kind — not every tick.
+let _alertsReady = null;
+function ensureAlertSchema() {
+  if (!_alertsReady) {
+    _alertsReady = pool.query(`create table if not exists integrity_alerts (
+        tenant_id text not null,
+        employee_ref text not null,
+        day date not null,
+        flag text not null,
+        alerted_at timestamptz not null default now(),
+        primary key (tenant_id, employee_ref, day, flag)
+      )`).then(() => true, (e) => {
+      console.error('[attendance] could not add integrity_alerts:', e && e.message);
+      _alertsReady = null;
+      return false;
+    });
+  }
+  return _alertsReady;
+}
+
+export async function integrityAlerted(tenantId, employeeRef, day) {
+  // Cannot remember what was told: say nothing rather than repeat it every tick.
+  if (!(await ensureAlertSchema())) return null;
+  const rows = await q(`select flag from integrity_alerts where tenant_id = $1 and employee_ref = $2 and day = $3::date`,
+    [tenantId, String(employeeRef), day]);
+  return new Set(rows.map((r) => r.flag));
+}
+
+export async function markIntegrityAlerted(tenantId, employeeRef, day, flags) {
+  if (!(await ensureAlertSchema()) || !flags.length) return;
+  await q(`insert into integrity_alerts (tenant_id, employee_ref, day, flag)
+           select $1, $2, $3::date, unnest($4::text[]) on conflict do nothing`,
+    [tenantId, String(employeeRef), day, flags]);
+}
+
 /// A "still here?" that left for [employeeRef]'s phones at [at].
 export async function logPresenceCheck(tenantId, employeeRef, at = new Date()) {
   if (!(await ensurePresenceSchema())) return;
