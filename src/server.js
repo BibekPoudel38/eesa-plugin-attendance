@@ -17,6 +17,7 @@ import { telemetry, flush as flushTelemetry } from './telemetry.js';
 import { notifyUser, notifyUsers } from './notify.js';
 import { recordEvent } from './telemetry.js';
 import { startSummaries } from './summaries.js';
+import { startPresenceChecks } from './presence_checks.js';
 import { spanOf } from './summary_plan.js';
 import { appRoleOf, uiRoleOf, rosterRoleOf } from './roles.js';
 
@@ -506,6 +507,18 @@ app.post('/api/locationState', emp, async (req, res) => {
     state, reason, source, clientId, at: when.at, lastOnAt: seen && !seen.error ? seen.at : null,
   }) });
 });
+/// The phone's own log of a shift, sent in batches whenever it has a network —
+/// so a stretch in airplane mode arrives when the phone is back, in order and
+/// with the times it happened (presence.js). The phone sends at most 150
+/// entries a call, which stays well inside the 100 KB body limit.
+app.post('/api/presence', emp, async (req, res) => {
+  const { deviceId = null, entries = null } = req.body || {};
+  if (!deviceId || !Array.isArray(entries)) {
+    return res.status(400).json({ ok: false, error: { code: 'BAD_LOG', message: 'deviceId and entries are required.' } });
+  }
+  res.json({ ok: true, data: await db.recordPresence(req.ctx.tenantId, req.ctx.sub, { deviceId, entries }) });
+});
+
 app.get('/api/getMyStatus', emp, async (req, res) => res.json({ ok: true, data: await db.myStatus(req.ctx.tenantId, req.ctx.sub) }));
 app.get('/api/getMyZones', emp, async (req, res) => res.json({ ok: true, data: await db.listZones(req.ctx.tenantId) }));
 app.get('/api/getMyHistory', emp, async (req, res) =>
@@ -1006,7 +1019,7 @@ app.listen(port, () => {
   // this the first sign of a bad DATABASE_URL is a stack trace on whichever
   // request happens to arrive first.
   db.ensureSimplifyTables()
-    .then(() => startSummaries({ managerAudience, names: nameIndex }))
+    .then(() => { startSummaries({ managerAudience, names: nameIndex }); startPresenceChecks(); })
     .catch((e) => console.error('[attendance] could not prepare attendance tables:', e && e.message));
   db.ping()
     .then(() => console.log(`[attendance] database OK (${db.dbHost()})`))

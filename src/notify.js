@@ -6,8 +6,10 @@ const GATEWAY_SECRET = process.env.PLUGIN_GATEWAY_SECRET || '';
 
 import { recordEvent } from './telemetry.js';
 
-export async function notifyUser(tenantId, userId, { title, body = '', type = 'attendance', data = {} }) {
-  if (!GATEWAY_SECRET || !tenantId || !userId || !title) return;
+/// [silent]: wake the app with nothing on screen and nothing in the inbox — the
+/// phone does some work and goes back to sleep. Needs no title.
+export async function notifyUser(tenantId, userId, { title = '', body = '', type = 'attendance', data = {}, silent = false }) {
+  if (!GATEWAY_SECRET || !tenantId || !userId || (!title && !silent)) return;
   // Best-effort, but no longer SILENT.
   //
   // This never read the response status and swallowed every exception, so a
@@ -21,7 +23,7 @@ export async function notifyUser(tenantId, userId, { title, body = '', type = 'a
     const res = await fetch(`${API_BASE}/gateway/notify/`, {
       method: 'POST',
       headers: { 'X-Eesa-Gateway-Secret': GATEWAY_SECRET, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tenant: tenantId, userId, title, body, type, data }),
+      body: JSON.stringify({ tenant: tenantId, userId, title, body, type, data, ...(silent ? { silent: true } : {}) }),
     });
     if (!res.ok) {
       outcome = 'fail';

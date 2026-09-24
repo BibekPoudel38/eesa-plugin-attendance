@@ -613,7 +613,26 @@
       left_later: 'Checked out by hand, but the phone saw them leave later.',
       location_off: 'Location was off for part of the shift, so the phone could not see them leave. Those hours are not verified.',
       changed: 'Changed by a manager.',
+      away: 'The phone was well outside the work zone while they were checked in.',
+      simulated: 'iOS said a location came from software, not from GPS.',
+      clock_changed: 'The phone’s clock was moved by hand during the shift.',
+      log_gap: 'Part of the phone’s log is missing or was changed on the phone.',
+      offline: 'No network for part of the shift (airplane mode or no signal). The phone kept its log and sent it later.',
+      restarted: 'The phone was switched off and on during the shift.',
     };
+    // What the phone's own log showed during the shift, one line each: what
+    // happened, and the evidence for it. Hours are never changed by these; the
+    // manager looks and decides.
+    const PROOF = {
+      away: { title: 'Away from the zone', sub: (e) => `${metres(e.meters)} from ${e.zone || 'the zone'}` },
+      simulated: { title: 'Location not from GPS', sub: () => 'iOS says software produced it' },
+      clock_changed: { title: 'Clock changed', sub: (e) => `Moved ${dur(Math.abs(e.byMs || 0) / 60000)} ${e.byMs > 0 ? 'ahead' : 'back'} by hand` },
+      log_gap: { title: 'Log incomplete', sub: (e) => (e.edited ? 'An entry was changed on the phone'
+        : e.missing ? `${e.missing} ${e.missing === 1 ? 'entry' : 'entries'} missing` : 'The log does not join up') },
+      offline: { title: 'No network', sub: () => 'Airplane mode or no signal · the phone kept its log' },
+      restarted: { title: 'Phone restarted', sub: () => 'Switched off and on in this time' },
+    };
+    const proofSpan = (e) => (e.until && e.until !== e.at ? `${timeOf(e.at)} – ${timeOf(e.until)}` : timeOf(e.at));
     // Why the phone could not see them leave, in the words of the setting.
     const LOCATION_WHY = {
       services_off: 'Location Services off',
@@ -624,8 +643,13 @@
     };
     // "2:05 PM – 3:10 PM", or "since 2:05 PM" while it is still off.
     const offSpan = (w) => (w.open ? `since ${timeOf(w.from)}` : `${timeOf(w.from)} – ${timeOf(w.to)}`);
-    // A day whose only problem is location reads as that, not a vaguer "Needs a fix".
-    const fixLabel = (d) => ((d.flags || []).every((f) => f === 'location_off') ? 'Location off' : 'Needs a fix');
+    // A day with one kind of problem reads as that problem, not a vaguer "Needs a
+    // fix". No network and a restart happen to honest phones; they never name a day.
+    const fixLabel = (d) => {
+      const kinds = [...new Set((d.flags || []).filter((f) => f !== 'offline' && f !== 'restarted'))];
+      if (kinds.length !== 1) return 'Needs a fix';
+      return kinds[0] === 'location_off' ? 'Location off' : (PROOF[kinds[0]] || {}).title || 'Needs a fix';
+    };
 
     const initials = (s) => (String(s || '?').trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join('') || '?').toUpperCase();
     const metres = (m) => (m == null ? '' : m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`);
@@ -865,6 +889,10 @@
           <span class="cell__title">Location off</span>
           <span class="cell__sub">${esc([LOCATION_WHY[w.reason], 'not verified'].filter(Boolean).join(' · '))}</span></span>
         <span class="cell__detail">${esc(offSpan(w))}</span></div>`;
+    const proofCell = (e) => (PROOF[e.flag] ? `<div class="cell"><span class="cell__main">
+          <span class="cell__title">${esc(PROOF[e.flag].title)}</span>
+          <span class="cell__sub">${esc(PROOF[e.flag].sub(e))}</span></span>
+        <span class="cell__detail">${esc(proofSpan(e))}</span></div>` : '');
     const CHEV = '<svg class="chev" viewBox="0 0 8 13" aria-hidden="true"><path d="M1.5 1.5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     // "9:02 AM" on the restaurant's clock, in the phone's own format.
     const hm = (iso) => iso
@@ -1417,9 +1445,11 @@
         box.innerHTML = cellNote('Loading…');
         try {
           const evs = await api('/api/admin/events?' + new URLSearchParams({ employeeRef: ref, from: day, to: day }));
-          const offs = ((PERSON.days || []).find((x) => x.day === day) || {}).locationOff || [];
+          const theDay = (PERSON.days || []).find((x) => x.day === day) || {};
+          const offs = theDay.locationOff || [];
           const rows = [...evs.map((e) => ({ at: e.at, html: punchCell(e, false) })),
-            ...offs.map((w) => ({ at: w.from, html: offCell(w) }))]
+            ...offs.map((w) => ({ at: w.from, html: offCell(w) })),
+            ...(theDay.integrity || []).map((e) => ({ at: e.at, html: proofCell(e) }))]
             .sort((a, b) => new Date(b.at) - new Date(a.at)).map((r) => r.html).join('');
           box.innerHTML = (rows || cellNote('Nothing recorded on this day.'))
             + `<button class="cell cell--action" type="button" data-fix="${esc(day)}">Fix times</button>`;
@@ -1509,7 +1539,7 @@
         const attrs = `data-ref="${esc(p.ref)}" data-day="${day}"`;
         if (!d) return `<button class="daycell none" ${attrs} ${day > today ? 'disabled' : ''} title="Nothing recorded">–</button>`;
         if (d.open) return `<button class="daycell open" ${attrs} title="At work now">${dur((day === today ? sofar.get(p.ref) : null) ?? d.totalMinutes)}</button>`;
-        if (d.needsFix) return `<button class="daycell fix" ${attrs} title="Needs a fix">${d.totalMinutes ? dur(d.totalMinutes) : 'Fix'}</button>`;
+        if (d.needsFix) return `<button class="daycell fix" ${attrs} title="${esc(fixLabel(d))}">${d.totalMinutes ? dur(d.totalMinutes) : 'Fix'}</button>`;
         const edited = d.corrected ? ' changed' : '';
         return `<button class="daycell${edited}" ${attrs} ${d.corrected ? 'title="Changed by a manager"' : ''}>${dur(d.totalMinutes)}</button>`;
       };
@@ -1559,6 +1589,7 @@
       const hand = (d && d.handOuts) || [];
       const flags = ((d && d.flags) || []).filter((f) => FLAG_TEXT[f]);
       const offs = (d && d.locationOff) || [];
+      const proof = ((d && d.integrity) || []).filter((e) => PROOF[e.flag]);
       const offMinutes = offs.reduce((n, w) => n + (w.minutes || 0), 0);
       // The latest moment they were really there: the phone's exit after a hand
       // check-out, or a later departure if they came back (Jeeva, 15 Sep: out by
@@ -1574,6 +1605,8 @@
         ${offs.length ? `<div class="evidence">${offs.map((w) =>
           `Location off <b>${esc(offSpan(w))}</b>${w.earliest ? ` — may have started from ${esc(timeOf(w.earliest))}` : ''}.`).join('<br>')}
           <br><button class="btn link" type="button" id="fxtakeoff">Take off ${esc(dur(offMinutes))}</button></div>` : ''}
+        ${proof.length ? `<div class="evidence">${proof.map((e) =>
+          `${esc(PROOF[e.flag].title)} <b>${esc(proofSpan(e))}</b> — ${esc(PROOF[e.flag].sub(e))}.`).join('<br>')}</div>` : ''}
         <div class="times">
           <label class="field">In<input type="time" id="fxin" value="${d && d.firstIn ? hmTZ(d.firstIn) : ''}"></label>
           <label class="field">Out<input type="time" id="fxout" value="${suggestOut ? hmTZ(suggestOut) : ''}"></label>

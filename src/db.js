@@ -5,6 +5,7 @@
 // leave this layer (camelCase, ISO-8601 timestamps) so the REST/MCP surfaces and
 // the Flutter client speak one shape. No Firestore/Firebase concepts remain.
 import pg from 'pg';
+import { normalizeEntry, presenceEvidence, STRONG_FLAGS } from './presence.js';
 
 const { Pool } = pg;
 
@@ -571,6 +572,206 @@ export async function recordLocationState(tenantId, employeeRef, {
   return { recorded: rows.length > 0 };
 }
 
+/// The phone's own log of each shift (presence.js), kept per phone by its
+/// sequence number: a batch sent twice is filed once, and a hole shows.
+/// Never throws — a database that refuses the table still records punches.
+const MAX_PRESENCE_BATCH = 500;
+const PRESENCE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+let _presenceReady = null;
+async function ensurePresenceSchema() {
+  if (_presenceReady) return _presenceReady;
+  _presenceReady = (async () => {
+    try {
+      await pool.query(`create table if not exists presence_log (
+        id bigserial primary key,
+        tenant_id text not null,
+        employee_ref text not null,
+        device_id text not null,
+        seq bigint not null,
+        at timestamptz not null,
+        server_at timestamptz,
+        elapsed_ms bigint,
+        restarted boolean,
+        lat double precision,
+        lng double precision,
+        accuracy_m double precision,
+        simulated boolean,
+        online boolean,
+        net text,
+        location text,
+        low_power boolean,
+        battery real,
+        trigger text,
+        prev_hash text,
+        hash text,
+        received_at timestamptz not null default now()
+      )`);
+      await pool.query(`create unique index if not exists presence_log_seq
+        on presence_log (tenant_id, employee_ref, device_id, seq)`);
+      await pool.query(`create index if not exists presence_log_person_at
+        on presence_log (tenant_id, employee_ref, at)`);
+      await pool.query(`create table if not exists presence_checks (
+        tenant_id text not null,
+        employee_ref text not null,
+        sent_at timestamptz not null default now(),
+        primary key (tenant_id, employee_ref)
+      )`);
+      return true;
+    } catch (e) {
+      console.error('[attendance] could not add the presence log:', e && e.message);
+      return false;
+    }
+  })();
+  return _presenceReady;
+}
+
+/// File a batch of the phone's log. Entries it cannot use are dropped, not
+/// guessed at; the answer says how many were new and the highest sequence
+/// seen, so the phone can let go of what the server has.
+export async function recordPresence(tenantId, employeeRef, { deviceId = null, entries = [], now = Date.now() } = {}) {
+  const dev = deviceId == null ? '' : String(deviceId).trim().slice(0, 64);
+  if (!dev) return { accepted: 0, lastSeq: null, error: 'no_device' };
+  const clean = (Array.isArray(entries) ? entries : [])
+    .slice(0, MAX_PRESENCE_BATCH)
+    .map(normalizeEntry)
+    .filter(Boolean)
+    // How long ago the phone wrote it, by its stopwatch, puts it on our clock —
+    // so an entry is judged by when it happened, not by what the phone's said.
+    .map((e) => ({ ...e, serverAt: e.ageMs != null && e.ageMs <= PRESENCE_MAX_AGE_MS ? now - e.ageMs : null }))
+    .filter((e) => {
+      const t = e.serverAt != null ? e.serverAt : e.at;
+      return t > now - PRESENCE_MAX_AGE_MS && t < now + 24 * 60 * 60 * 1000;
+    });
+  if (!clean.length) return { accepted: 0, lastSeq: null };
+  if (!(await ensurePresenceSchema())) return { accepted: 0, lastSeq: null, error: 'unavailable' };
+  const cols = ['tenant_id', 'employee_ref', 'device_id', 'seq', 'at', 'server_at', 'elapsed_ms', 'restarted',
+    'lat', 'lng', 'accuracy_m', 'simulated', 'online', 'net', 'location', 'low_power', 'battery', 'trigger',
+    'prev_hash', 'hash'];
+  const params = [];
+  const values = clean.map((e, i) => {
+    params.push(tenantId, String(employeeRef), dev, e.seq, new Date(e.at).toISOString(),
+      e.serverAt == null ? null : new Date(e.serverAt).toISOString(), e.elapsedMs,
+      e.restarted, e.lat, e.lng, e.accuracyM, e.simulated, e.online, e.net, e.location, e.lowPower, e.battery,
+      e.trigger, e.prevHash, e.hash);
+    return `(${cols.map((_, j) => `$${i * cols.length + j + 1}`).join(', ')})`;
+  });
+  const rows = await q(
+    `insert into presence_log (${cols.join(', ')}) values ${values.join(', ')}
+     on conflict (tenant_id, employee_ref, device_id, seq) do nothing
+     returning seq`,
+    params,
+  );
+  return { accepted: rows.length, lastSeq: Math.max(...clean.map((e) => e.seq)) };
+}
+
+/// Who should be asked "still here?" now, claimed so no one is asked twice: on
+/// the clock (last punch a work check-in, under twelve hours ago), nothing in
+/// their phone's log for [everyMs], and not asked in that long either. The
+/// claim is the row in presence_checks, so two instances never both send.
+export async function claimPresenceChecks({ everyMs, now = Date.now() } = {}) {
+  if (!(await ensurePresenceSchema())) return [];
+  const rows = await q(
+    `with last as (
+       select distinct on (tenant_id, employee_ref) tenant_id, employee_ref, type, for_work
+         from events
+        where at > $1::timestamptz - ($3::bigint * interval '1 millisecond')
+          and at <= $1::timestamptz
+        order by tenant_id, employee_ref, at desc
+     )
+     insert into presence_checks as pc (tenant_id, employee_ref, sent_at)
+     select l.tenant_id, l.employee_ref, $1::timestamptz
+       from last l
+      where l.type = 'check_in' and l.for_work is not false
+        and not exists (
+          select 1 from presence_log p
+           where p.tenant_id = l.tenant_id and p.employee_ref = l.employee_ref
+             and coalesce(p.server_at, p.at) > $1::timestamptz - ($2::bigint * interval '1 millisecond'))
+     on conflict (tenant_id, employee_ref) do update set sent_at = excluded.sent_at
+      where pc.sent_at <= excluded.sent_at - ($2::bigint * interval '1 millisecond')
+     returning tenant_id, employee_ref`,
+    [new Date(now).toISOString(), Math.trunc(everyMs), MAX_OPEN_SHIFT_MS],
+  );
+  return rows.map((r) => ({ tenantId: r.tenant_id, employeeRef: String(r.employee_ref) }));
+}
+
+/// What the phones' logs say about each (person, shift day) in a window, in
+/// three queries. Key: `${employeeRef}|${YYYY-MM-DD}` → [{flag, at, until?, …}].
+async function presenceIndex(tenantId, { from = null, to = null, employeeRef = null, now = Date.now() } = {}) {
+  const out = new Map();
+  if (!(await ensurePresenceSchema())) return out;
+  const tz = await tenantTz(tenantId);
+  const f = from || '1970-01-01';
+  const t = to || '2999-12-31';
+  const ref = employeeRef == null ? null : String(employeeRef);
+  const logs = await q(
+    `select employee_ref, device_id, seq, (extract(epoch from at) * 1000)::bigint as at,
+            (extract(epoch from server_at) * 1000)::bigint as server_at, elapsed_ms, restarted,
+            lat, lng, accuracy_m, simulated, online, net, location, trigger, prev_hash, hash
+       from presence_log
+      where tenant_id = $1
+        and coalesce(server_at, at) >= ((($3::date - 1)::timestamp) at time zone $2)
+        and coalesce(server_at, at) <  ((($4::date + 2)::timestamp) at time zone $2)
+        and ($5::text is null or employee_ref = $5)
+      order by employee_ref, device_id, seq`,
+    [tenantId, tz, f, t, ref],
+  );
+  if (!logs.length) return out;
+  const entriesOf = new Map();
+  for (const r of logs) {
+    const k = String(r.employee_ref);
+    if (!entriesOf.has(k)) entriesOf.set(k, []);
+    entriesOf.get(k).push({
+      deviceId: r.device_id, seq: Number(r.seq), at: Number(r.at),
+      serverAt: r.server_at == null ? null : Number(r.server_at),
+      elapsedMs: r.elapsed_ms == null ? null : Number(r.elapsed_ms),
+      restarted: r.restarted,
+      lat: r.lat, lng: r.lng, accuracyM: r.accuracy_m, simulated: r.simulated, online: r.online,
+      net: r.net, location: r.location, trigger: r.trigger, prevHash: r.prev_hash, hash: r.hash,
+    });
+  }
+  const zones = new Map((await q(
+    `select id, name, center_lat, center_lng, radius_m from zones where tenant_id = $1`, [tenantId],
+  )).map((z) => [String(z.id), {
+    name: z.name, lat: Number(z.center_lat), lng: Number(z.center_lng), radiusM: Number(z.radius_m),
+  }]));
+  const events = await q(
+    `select employee_ref, type, at, for_work, note, zone_id from events
+      where tenant_id = $1 and employee_ref = any($5::text[])
+        and at >= ((($3::date - 1)::timestamp) at time zone $2)
+        and at <  ((($4::date + 2)::timestamp) at time zone $2)
+      order by employee_ref, at`,
+    [tenantId, tz, f, t, [...entriesOf.keys()]],
+  );
+  const punches = new Map();
+  for (const e of events) {
+    const k = String(e.employee_ref);
+    if (!punches.has(k)) punches.set(k, []);
+    punches.get(k).push(e);
+  }
+  for (const [k, list] of punches) {
+    const zoneAt = new Map(list.filter((e) => e.type === 'check_in')
+      .map((e) => [new Date(e.at).getTime(), e.zone_id == null ? null : zones.get(String(e.zone_id)) || null]));
+    const days = new Map();
+    for (const e of assignShiftDays(list, tz)) {
+      if (e.shiftDay < f || e.shiftDay > t) continue;
+      if (!days.has(e.shiftDay)) days.set(e.shiftDay, []);
+      days.get(e.shiftDay).push(e);
+    }
+    for (const [day, dayEvents] of days) {
+      const intervals = computeToday(dayEvents, { now }).intervals.map((iv) => ({
+        from: iv.from, to: iv.to, zone: zoneAt.get(new Date(iv.from).getTime()) || null,
+      }));
+      const evidence = presenceEvidence(intervals, entriesOf.get(k) || []);
+      if (evidence.length) {
+        out.set(`${k}|${day}`, evidence.map((ev) => ({
+          ...ev, at: iso(new Date(ev.at)), ...(ev.until != null ? { until: iso(new Date(ev.until)) } : {}),
+        })));
+      }
+    }
+  }
+  return out;
+}
+
 /// When location was off during time on the clock, for every (person, shift
 /// day) in a window, in two queries. Key: `${employeeRef}|${YYYY-MM-DD}`.
 async function locationOffIndex(tenantId, { from = null, to = null, employeeRef = null, now = Date.now() } = {}) {
@@ -791,7 +992,32 @@ export function isNoOpPunch(last, type, { zoneId, forWork }, now = Date.now()) {
   return !last || last.type === 'check_out';
 }
 
-export async function recordEvent(
+/// One person's punches, one at a time.
+///
+/// recordEvent reads the last punch, decides whether this one repeats it, then
+/// writes. Two requests for the same person inside that window both read the
+/// same last punch and both write. 23 Sep: a phone arriving at Chups Anaheim
+/// sent its geofence check-in and, opened at that moment, the app's "stranded
+/// on site" rescue sent another — 13:05:24 and 13:05:25, both recorded, because
+/// each was judged against the 12:55 check-out before the other had landed.
+/// Queued behind each other, the second sees the first and is a repeat.
+///
+/// In-process, because the service runs as one instance. A second instance
+/// would need the same guard in Postgres (pg_advisory_xact_lock on the person).
+const _personQueue = new Map();
+export function withPersonLock(key, fn) {
+  const run = (_personQueue.get(key) || Promise.resolve()).then(() => fn());
+  const tail = run.then(() => {}, () => {});
+  _personQueue.set(key, tail);
+  tail.then(() => { if (_personQueue.get(key) === tail) _personQueue.delete(key); });
+  return run;
+}
+
+export function recordEvent(tenantId, employeeRef, ...rest) {
+  return withPersonLock(`${tenantId}|${employeeRef}`, () => recordEventNow(tenantId, employeeRef, ...rest));
+}
+
+async function recordEventNow(
   tenantId, employeeRef, type,
   { zoneId = null, lat = null, lng = null, accuracyM = null, forWork = true,
     source = 'geofence', workType = null, requireConfirm = false,
@@ -2413,10 +2639,11 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
   // The manager's flag "Nobody confirmed presence" is read off this list, and
   // the list never carried the answer — the day review said "needs a look"
   // and the card it opened showed nothing to look at.
-  const [vi, ci, li] = await Promise.all([
+  const [vi, ci, li, pi] = await Promise.all([
     verificationIndex(tenantId, { from, to }),
     confirmationIndex(tenantId, { from, to }),
     locationOffIndex(tenantId, { from, to }),
+    presenceIndex(tenantId, { from, to }),
   ]);
   return rows.map((r) => {
     const day = dayStr(r.day);
@@ -2431,7 +2658,11 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
       approvalStatus: r.approval_status || 'pending',
       approvedBy: r.approved_by || null,
       approvedAt: iso(r.approved_at),
-      ...dayFlags({ ...r, location_off: li.get(`${r.employee_ref}|${day}`) }),
+      ...dayFlags({
+        ...r,
+        location_off: li.get(`${r.employee_ref}|${day}`),
+        integrity: pi.get(`${r.employee_ref}|${day}`),
+      }),
       confirmStatus: ci.get(`${r.employee_ref}|${day}`) || null,
       payRate: r.pay_rate == null ? null : Number(r.pay_rate),
       // This day never got a check-out.
@@ -2465,9 +2696,18 @@ export async function listApprovals(tenantId, { from = null, to = null, status =
 ///                    only the day's last check-out that matters)
 ///   location_off   — the phone could not see them leave for part of the time
 ///                    on the clock, so those hours are its word only
+/// And what the phone's own log gave away (presence.js). Hours are never cut
+/// for it — the manager looks, with the evidence in front of them:
+///   away           — a reading well outside the zone while checked in
+///   simulated      — iOS said the location was produced by software
+///   clock_changed  — the phone's clock was moved by hand
+///   log_gap        — entries missing from the phone's log, or edited
+///   offline        — no network (airplane mode, no signal): shown, not held
+///                    against anyone on its own
+///   restarted      — the phone was switched off and on: shown, likewise
 /// A manager's correction resolves all of them; "changed" just says it happened.
 const LEFT_LATER_MIN_MS = 10 * 60 * 1000;
-const NEEDS_FIX = new Set(['no_check_out', 'no_check_in', 'over_12h', 'left_later', 'location_off']);
+const NEEDS_FIX = new Set(['no_check_out', 'no_check_in', 'over_12h', 'left_later', 'location_off', ...STRONG_FLAGS]);
 
 export function dayFlags(r, { now = Date.now(), sameShiftMs = SAME_PRESENCE_MS } = {}) {
   const trailingIn = r.trailing_in_at ? new Date(r.trailing_in_at).getTime() : null;
@@ -2478,6 +2718,7 @@ export function dayFlags(r, { now = Date.now(), sameShiftMs = SAME_PRESENCE_MS }
     .filter((h) => h.checkedOutAt && h.leftZoneAt
       && new Date(h.leftZoneAt) - new Date(h.checkedOutAt) >= LEFT_LATER_MIN_MS);
   const locationOff = Array.isArray(r.location_off) ? r.location_off : [];
+  const integrity = Array.isArray(r.integrity) ? r.integrity : [];
   const flags = [];
   if (corrected) {
     flags.push('changed');
@@ -2487,6 +2728,7 @@ export function dayFlags(r, { now = Date.now(), sameShiftMs = SAME_PRESENCE_MS }
     if (Number(r.total_minutes || 0) > 12 * 60) flags.push('over_12h');
     if (handOuts.length) flags.push('left_later');
     if (locationOff.length) flags.push('location_off');
+    for (const f of new Set(integrity.map((x) => x.flag))) flags.push(f);
   }
   return {
     open,
@@ -2501,6 +2743,8 @@ export function dayFlags(r, { now = Date.now(), sameShiftMs = SAME_PRESENCE_MS }
     leftZoneAt: !corrected && handOuts.length ? handOuts[handOuts.length - 1].leftZoneAt : null,
     // When the phone could not see them, kept after a fix: it is what the fix was about.
     locationOff,
+    // What the phone's log showed, kept after a fix for the same reason.
+    integrity,
     awayMinutes: Number(r.away_minutes || 0),
   };
 }
