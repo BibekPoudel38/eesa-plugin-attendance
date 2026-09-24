@@ -162,6 +162,11 @@ describe('presence log and punch lock on a real database', { skip }, () => {
     for (const t of ['attendance_needs_a_look', 'attendance_day_evidence']) {
       assert.ok(listed.tools.some((x) => x.name === t), `${t} is offered to admins`);
     }
+    for (const t of listed.tools) {
+      assert.equal(t.annotations?.readOnlyHint, true, `${t.name} says it is a read, or Eesa asks "shall I?" first`);
+    }
+    const catalogue = await handleRpc({ method: 'tools/list' }, { tenantId: T }, {}, { names });
+    assert.ok(!catalogue.tools.some((x) => x.name === 'mark_attendance'), 'the one write is never listed');
     const staffList = await handleRpc({ method: 'tools/list' }, { tenantId: T, appRole: 'staff' }, {}, { names });
     assert.ok(!staffList.tools.some((x) => x.name === 'attendance_needs_a_look'), 'never to staff');
 

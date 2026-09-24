@@ -132,7 +132,11 @@ export async function handleRpc(body, ctx, serverInfo, helpers = {}) {
     // mark_attendance is in no set, so it never appears (agent write-safety).
     // runTool remains the hard per-caller gate regardless of what is listed.
     const visible = ctx && ctx.appRole ? allowedToolsFor(ctx) : ADMIN_TOOLS;
-    return { tools: TOOLS.filter((t) => visible.has(t.name)) };
+    // Everything listed here is a read (writes go through the REST hot path),
+    // and says so. Eesa's tool sync turns readOnlyHint into GET, which is what
+    // keeps its write-confirm gate out of the way: unhinted, every attendance
+    // question in chat stopped at "type yes to fetch who is present".
+    return { tools: TOOLS.filter((t) => visible.has(t.name)).map((t) => ({ ...t, annotations: { readOnlyHint: true } })) };
   }
   if (method === 'tools/call') {
     const name = params.name;
