@@ -6,6 +6,7 @@
 // the Flutter client speak one shape. No Firestore/Firebase concepts remain.
 import pg from 'pg';
 import { normalizeEntry, presenceEvidence, STRONG_FLAGS } from './presence.js';
+import { recordEvent as recordTelemetry } from './telemetry.js';
 
 const { Pool } = pg;
 
@@ -696,7 +697,24 @@ export async function claimPresenceChecks({ everyMs, now = Date.now() } = {}) {
 
 /// What the phones' logs say about each (person, shift day) in a window, in
 /// three queries. Key: `${employeeRef}|${YYYY-MM-DD}` → [{flag, at, until?, …}].
-async function presenceIndex(tenantId, { from = null, to = null, employeeRef = null, now = Date.now() } = {}) {
+///
+/// Evidence, never the day itself: a failure here is reported and the days are
+/// shown without it, rather than taking the manager's page and the morning
+/// summary down with it.
+async function presenceIndex(tenantId, opts = {}) {
+  try {
+    return await presenceIndexNow(tenantId, opts);
+  } catch (e) {
+    const message = String((e && e.message) || e).slice(0, 200);
+    console.error('[attendance] presence evidence unavailable:', message);
+    recordTelemetry('attendance.presence.failed', {
+      outcome: 'fail', tenantId, errorCode: 'EVIDENCE_READ_FAILED', errorMessage: message,
+    });
+    return new Map();
+  }
+}
+
+async function presenceIndexNow(tenantId, { from = null, to = null, employeeRef = null, now = Date.now() } = {}) {
   const out = new Map();
   if (!(await ensurePresenceSchema())) return out;
   const tz = await tenantTz(tenantId);

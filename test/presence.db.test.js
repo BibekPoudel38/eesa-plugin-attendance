@@ -138,6 +138,19 @@ describe('presence log and punch lock on a real database', { skip }, () => {
     assert.equal(clock.at, new Date(T3 + 40 * MIN).toISOString());
   });
 
+  test('a presence log that cannot be read leaves the days standing, without it', async () => {
+    const D = daysAgo(2);
+    await db.pool.query('alter table presence_log rename to presence_log_away');
+    try {
+      const row = await dayRow('39', D);
+      assert.equal(row.totalMinutes, 240, 'the manager still sees the day');
+      assert.deepEqual(row.integrity, []);
+    } finally {
+      await db.pool.query('alter table presence_log_away rename to presence_log');
+    }
+    assert.deepEqual((await dayRow('39', D)).flags, ['away'], 'and the evidence is back once it can be read');
+  });
+
   test('"still here?" goes to whoever is on the clock and quiet, once per twenty minutes', async () => {
     const now = Date.now();
     const every = 20 * MIN;
