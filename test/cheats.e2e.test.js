@@ -260,7 +260,7 @@ describe('cheating attendance, end to end', { skip }, () => {
     base = `http://127.0.0.1:${port}`;
     db = await import('../src/db.js');
     await db.ensureSimplifyTables();
-    for (const table of ['events', 'day_summaries', 'zones', 'tenant_settings', 'day_corrections', 'presence_log', 'presence_checks', 'presence_check_log', 'location_states']) {
+    for (const table of ['events', 'day_summaries', 'zones', 'tenant_settings', 'day_corrections', 'presence_log', 'presence_checks', 'presence_check_log', 'location_states', 'nfc_tags']) {
       await db.pool.query(`delete from ${table} where tenant_id = $1`, [T]).catch(() => {});
     }
     await db.setTenantTimezone(T, TZ);
@@ -490,6 +490,17 @@ describe('cheating attendance, end to end', { skip }, () => {
       `select count(*)::int n from events where tenant_id = $1 and employee_ref = '116' and type = 'check_in'`, [T]);
     seen.push(`${'two check-ins a second apart'.padEnd(46)}${rows[0].n} row${rows[0].n === 1 ? '' : 's'}`);
     assert.equal(rows[0].n, 1);
+  });
+
+  test('a location tag UID sent from home checks nobody in', async () => {
+    const uid = '04C0FFEE123456';
+    await db.pool.query(`insert into nfc_tags (tenant_id, uid, kind, zone_id) values ($1, $2, 'location', $3)`, [T, uid, zoneId]);
+    const p = await new Phone('119', fixed).init();
+    const r = await call(p.tok, 'POST', '/api/checkInNfc', { uid, lat: HOME.lat, lng: HOME.lng });
+    const { rows } = await db.pool.query(`select count(*)::int n from events where tenant_id = $1 and employee_ref = '119'`, [T]);
+    seen.push(`${'tag UID sent from home'.padEnd(46)}${rows[0].n} row${rows[0].n === 1 ? '' : 's'}`);
+    assert.equal(r.status, 404);
+    assert.equal(rows[0].n, 0);
   });
 
   test('KNOWN LIMIT: the phone left at work while they go home', { todo: 'needs proof of the person, not the phone' }, async () => {

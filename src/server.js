@@ -449,23 +449,6 @@ app.post('/api/checkOut', emp, async (req, res) => {
   res.json({ ok: true, data: { ...status, punch: punchOutcome(ev) } });
 });
 
-// Employee taps a LOCATION NFC tag with their OWN phone → check-in, or check-out
-// if already in (tap-to-toggle). The tag maps to a zone; the event is source=nfc.
-app.post('/api/checkInNfc', emp, async (req, res) => {
-  const { uid, lat = null, lng = null, accuracyM = null, workType = null } = req.body || {};
-  const tag = await db.resolveNfcTag(req.ctx.tenantId, uid);
-  if (!tag) {
-    return res.status(404).json({ ok: false, error: { code: 'UNKNOWN_TAG', message: 'This NFC tag is not registered for your workspace.' } });
-  }
-  if (tag.kind !== 'location') {
-    return res.status(400).json({ ok: false, error: { code: 'WRONG_TAG', message: 'That is an employee badge, not a location tag — tap it on the kiosk instead.' } });
-  }
-  const before = await db.myStatus(req.ctx.tenantId, req.ctx.sub);
-  const type = before.checkedIn ? 'check_out' : 'check_in';
-  await db.recordEvent(req.ctx.tenantId, req.ctx.sub, type, { zoneId: tag.zoneId, lat, lng, accuracyM, source: 'nfc', workType });
-  res.json({ ok: true, data: { action: type, tag: tag.label || tag.uid, status: await db.myStatus(req.ctx.tenantId, req.ctx.sub) } });
-});
-
 // Kiosk mode: a shared device taps an employee BADGE → check-in/out for that
 // employee. Manager/admin-authed (a dedicated kiosk-device token can replace
 // this later). Physical badge + attended device resists buddy-punching.
